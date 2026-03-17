@@ -1,5 +1,5 @@
 import { Module } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 import { MongooseModule } from '@nestjs/mongoose';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { APP_GUARD } from '@nestjs/core';
@@ -17,9 +17,21 @@ import { AuthModule } from './auth/auth.module';
     ConfigModule.forRoot({ isGlobal: true }),
 
     // ─── Database ───────────────────────────────────────
-    MongooseModule.forRoot(
-      process.env.MONGODB_URI || 'mongodb://localhost:27017/securecomm',
-    ),
+    MongooseModule.forRootAsync({
+      imports: [ConfigModule],
+      useFactory: async (configService: ConfigService) => {
+        const uri = configService.get<string>('MONGODB_URI');
+        if (!uri) {
+          console.error('❌ MONGODB_URI environment variable is missing!');
+        } else {
+          console.log(`✅ MongoDB connecting to: ${uri.split('@')[1] || 'database'}...`);
+        }
+        return {
+          uri: uri || 'mongodb://localhost:27017/securecomm',
+        };
+      },
+      inject: [ConfigService],
+    }),
 
     // ─── Rate Limiting (DDoS / Brute Force Protection) ──
     ThrottlerModule.forRoot([
