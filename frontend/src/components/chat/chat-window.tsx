@@ -219,8 +219,15 @@ export function ChatWindow({
     encryptionKey?: string
   ) => {
     try {
-      // Download encrypted file directly from Cloudinary URL
-      const res = await fetch(fileUrl);
+      const token = await getToken();
+      
+      // Proxy the download through our backend to bypass strict CORS blocks from Cloudinary
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/files/download?url=${encodeURIComponent(fileUrl)}`, {
+        headers: {
+          Authorization: `Bearer ${token}`
+        }
+      });
+      
       if (!res.ok) throw new Error("Download failed");
 
       let fileData: ArrayBuffer | Blob = await res.arrayBuffer();
