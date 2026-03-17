@@ -6,7 +6,12 @@ let socket: Socket | null = null;
 
 export function getSocket(token?: string): Socket {
   if (!socket) {
-    socket = io(process.env.NEXT_PUBLIC_WS_URL || "http://localhost:3001", {
+    const wsUrl =
+      process.env.NEXT_PUBLIC_WS_URL ||
+      (typeof window !== "undefined"
+        ? `${window.location.protocol}//${window.location.hostname}:3001`
+        : "http://localhost:3001");
+    socket = io(wsUrl, {
       autoConnect: false,
       auth: { token },
       transports: ["websocket", "polling"],
