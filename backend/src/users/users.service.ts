@@ -17,12 +17,21 @@ export class UsersService {
     this.transporter = nodemailer.createTransport({
       host: process.env.SMTP_HOST || 'smtp.gmail.com',
       port: parseInt(process.env.SMTP_PORT || '587'),
-      secure: false,
+      secure: process.env.SMTP_PORT === '465',
       auth: {
         user: process.env.SMTP_USER,
         pass: process.env.SMTP_PASS,
       },
-    });
+      // Force IPv4 because Render's outbound IPv6 to Gmail sometimes fails
+      tls: {
+        rejectUnauthorized: false,
+      },
+      // Some versions of nodemailer allow passing socket options directly
+      secureConnection: false,
+      requireTLS: true,
+      debug: false,
+      logger: false,
+    } as any);
   }
 
   async syncUser(data: {
