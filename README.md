@@ -23,8 +23,8 @@ Follow these steps to set up the project locally.
 Make sure you have the following installed on your machine:
 - [Node.js](https://nodejs.org/) (v18+)
 - [MongoDB](https://www.mongodb.com/) (Local or Atlas)
-- [MinIO](https://min.io/) (For local S3-compatible file storage)
 - A [Clerk](https://clerk.com/) account for authentication keys
+- **MinIO** (S3-compatible storage for files) — See setup instructions below.
 
 ### 1. Clone the Repository
 
@@ -33,7 +33,29 @@ git clone https://github.com/Paper-rex/SecureComm.git
 cd SecureComm
 ```
 
-### 2. Backend Setup
+### 2. MinIO Storage Setup
+
+You need MinIO running locally to handle secure file uploads. You can run it either via Docker or standalone.
+
+#### Option A: Run with Docker (Recommended for Windows/Mac)
+```bash
+docker run -p 9000:9000 -p 9001:9001 -e "MINIO_ROOT_USER=minioadmin" -e "MINIO_ROOT_PASSWORD=minioadmin" minio/minio server /data --console-address ":9001"
+```
+
+#### Option B: Run Standalone (Without Docker)
+1. Download the MinIO executable for your OS from [MinIO Downloads](https://min.io/download).
+2. Create a data folder somewhere on your machine (e.g., `C:\minio-data`).
+3. Open a terminal and run:
+```bash
+# Windows
+minio.exe server C:\minio-data --console-address ":9001"
+# MacOS/Linux
+./minio server /path/to/data --console-address ":9001"
+```
+
+> **Important**: Once MinIO is running (via Docker or standalone), open the console at `http://localhost:9001`, log in with `minioadmin` / `minioadmin`, and **create a bucket named `securecomm-files`**.
+
+### 3. Backend Setup
 
 Open a terminal and navigate to the backend folder:
 ```bash
@@ -84,7 +106,7 @@ Start the backend development server:
 npm run start:dev
 ```
 
-### 3. Frontend Setup
+### 4. Frontend Setup
 
 Open a new terminal and navigate to the frontend folder:
 ```bash
@@ -116,7 +138,7 @@ Start the frontend development server:
 npm run dev
 ```
 
-### 4. Running the App
+### 5. Running the App
 
 Once both servers are running:
 1. Open [http://localhost:3000](http://localhost:3000) in your browser.
