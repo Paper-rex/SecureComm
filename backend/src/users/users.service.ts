@@ -15,21 +15,14 @@ export class UsersService {
     @InjectModel(Invitation.name) private invitationModel: Model<InvitationDocument>,
   ) {
     this.transporter = nodemailer.createTransport({
-      // Hardcode IPv4 address to bypass Node.js IPv6 DNS resolution on Render
-      host: '142.251.10.108', // smtp.gmail.com IPv4
+      host: process.env.SMTP_HOST || 'smtp.gmail.com',
       port: parseInt(process.env.SMTP_PORT || '587'),
       secure: process.env.SMTP_PORT === '465',
       auth: {
         user: process.env.SMTP_USER,
         pass: process.env.SMTP_PASS,
       },
-      tls: {
-        // Required for SNI routing since we use an IP for the host
-        servername: 'smtp.gmail.com',
-        rejectUnauthorized: false,
-      },
-      requireTLS: true,
-    } as any);
+    });
   }
 
   async syncUser(data: {
