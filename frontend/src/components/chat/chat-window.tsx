@@ -228,15 +228,23 @@ export function ChatWindow({
         }
       });
       
-      if (!res.ok) throw new Error("Download failed");
+      if (!res.ok) {
+        const errText = await res.text().catch(() => "Unknown error");
+        throw new Error(`Download API failed: ${res.status} - ${errText}`);
+      }
 
       let fileData: ArrayBuffer | Blob = await res.arrayBuffer();
 
       // Decrypt if encryption metadata is available
       if (encryptionIv && encryptionKey) {
-        const { decryptFile, importAESKey } = await import("@/lib/crypto");
-        const aesKey = await importAESKey(encryptionKey);
-        fileData = await decryptFile(fileData, encryptionIv, aesKey);
+        try {
+          const { decryptFile, importAESKey } = await import("@/lib/crypto");
+          const aesKey = await importAESKey(encryptionKey);
+          fileData = await decryptFile(fileData, encryptionIv, aesKey);
+        } catch (decryptErr) {
+          console.error("Decryption failed:", decryptErr);
+          throw new Error("Failed to decrypt the file. The key might be invalid.");
+        }
       }
 
       const blob = new Blob([fileData]);
@@ -248,8 +256,10 @@ export function ChatWindow({
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-    } catch (err) {
+    } catch (err: any) {
       console.error("Failed to download file:", err);
+      // Let the user know exactly why it failed via alert (since no toast is imported)
+      alert(err.message || "Failed to download file");
     }
   };
 
