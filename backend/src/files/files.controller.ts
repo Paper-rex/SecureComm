@@ -16,11 +16,11 @@ import { AuthGuard } from '../auth/auth.guard';
 import { v4 as uuidv4 } from 'uuid';
 
 @Controller('files')
-@UseGuards(AuthGuard)
 export class FilesController {
-  constructor(private readonly filesService: FilesService) {}
+  constructor(private readonly filesService: FilesService) { }
 
   @Post('upload')
+  @UseGuards(AuthGuard)
   @UseInterceptors(FileInterceptor('file'))
   async uploadFile(@UploadedFile() file: Express.Multer.File) {
     if (!file) {
