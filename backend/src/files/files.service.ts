@@ -1,68 +1,72 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import * as Minio from 'minio';
+import { v2 as cloudinary } from 'cloudinary';
+import type { UploadApiResponse } from 'cloudinary';
 
 @Injectable()
 export class FilesService {
   private readonly logger = new Logger(FilesService.name);
-  private minioClient: Minio.Client;
-  private bucketName: string;
 
   constructor(private configService: ConfigService) {
-    this.minioClient = new Minio.Client({
-      endPoint: this.configService.get('MINIO_ENDPOINT', 'localhost'),
-      port: parseInt(this.configService.get('MINIO_PORT', '9000')),
-      useSSL: this.configService.get('MINIO_USE_SSL') === 'true',
-      accessKey: this.configService.get('MINIO_ACCESS_KEY', 'minioadmin'),
-      secretKey: this.configService.get('MINIO_SECRET_KEY', 'minioadmin'),
+    cloudinary.config({
+      cloud_name: this.configService.get('CLOUDINARY_CLOUD_NAME', ''),
+      api_key: this.configService.get('CLOUDINARY_API_KEY', ''),
+      api_secret: this.configService.get('CLOUDINARY_API_SECRET', ''),
     });
-    this.bucketName = this.configService.get('MINIO_BUCKET', 'securecomm-files');
-    this.ensureBucket();
+    this.logger.log('Cloudinary storage configured');
   }
 
-  private async ensureBucket(): Promise<void> {
-    try {
-      const exists = await this.minioClient.bucketExists(this.bucketName);
-      if (!exists) {
-        await this.minioClient.makeBucket(this.bucketName);
-        this.logger.log(`Created MinIO bucket: ${this.bucketName}`);
-      }
-    } catch (error) {
-      this.logger.warn(`MinIO bucket check failed (will retry on upload): ${error.message}`);
-    }
-  }
-
+  /**
+   * Upload an encrypted file buffer to Cloudinary.
+   * Uses resource_type "raw" since files are encrypted binary.
+   * Returns { url, publicId }.
+   */
   async uploadFile(
     fileBuffer: Buffer,
     storageKey: string,
-    mimeType: string,
-  ): Promise<string> {
-    await this.minioClient.putObject(
-      this.bucketName,
-      storageKey,
-      fileBuffer,
-      fileBuffer.length,
-      { 'Content-Type': mimeType },
-    );
-    return storageKey;
-  }
-
-  async downloadFile(storageKey: string): Promise<Buffer> {
-    const stream = await this.minioClient.getObject(
-      this.bucketName,
-      storageKey,
-    );
-
+    _mimeType: string,
+  ): Promise<{ url: string; publicId: string }> {
     return new Promise((resolve, reject) => {
-      const chunks: Buffer[] = [];
-      stream.on('data', (chunk) => chunks.push(chunk));
-      stream.on('end', () => resolve(Buffer.concat(chunks)));
-      stream.on('error', reject);
+      const uploadStream = cloudinary.uploader.upload_stream(
+        {
+          resource_type: 'raw',
+          public_id: storageKey,
+          folder: 'securecomm-files',
+          overwrite: true,
+        },
+        (error, result?: UploadApiResponse) => {
+          if (error || !result) {
+            this.logger.error('Cloudinary upload failed', error);
+            return reject(error || new Error('Upload failed'));
+          }
+          resolve({
+            url: result.secure_url,
+            publicId: result.public_id,
+          });
+        },
+      );
+      uploadStream.end(fileBuffer);
     });
   }
 
-  async deleteFile(storageKey: string): Promise<void> {
-    await this.minioClient.removeObject(this.bucketName, storageKey);
+  /**
+   * Download a file by its Cloudinary URL.
+   * Returns the file as a Buffer.
+   */
+  async downloadFile(fileUrl: string): Promise<Buffer> {
+    const response = await fetch(fileUrl);
+    if (!response.ok) {
+      throw new Error(`Failed to download file from Cloudinary: ${response.status}`);
+    }
+    const arrayBuffer = await response.arrayBuffer();
+    return Buffer.from(arrayBuffer);
+  }
+
+  /**
+   * Delete a file from Cloudinary by its public_id.
+   */
+  async deleteFile(publicId: string): Promise<void> {
+    await cloudinary.uploader.destroy(publicId, { resource_type: 'raw' });
   }
 
   /**
@@ -109,9 +113,6 @@ export class FilesService {
    */
   async scanForMalware(fileBuffer: Buffer): Promise<{ clean: boolean; threat?: string }> {
     // TODO: Integrate ClamAV via clamd socket
-    // Example with clamav.js:
-    // const scanner = new ClamScan({ clamdscan: { socket: '/var/run/clamav/clamd.ctl' } });
-    // const { isInfected, viruses } = await scanner.scanBuffer(fileBuffer);
     this.logger.log(`Scanning file (${fileBuffer.length} bytes) for malware...`);
     return { clean: true };
   }

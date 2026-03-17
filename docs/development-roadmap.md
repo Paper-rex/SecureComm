@@ -39,7 +39,7 @@
 
 ## Phase 5: Secure File Sharing (Day 6-7)
 - [x] Client-side file encryption (AES-256-GCM)
-- [x] MinIO file storage integration
+- [x] Cloudinary file storage integration
 - [x] File type validation (images, PDF, docs, ZIP)
 - [x] File size limits (25MB)
 - [x] Malware scanning (ClamAV integration point)

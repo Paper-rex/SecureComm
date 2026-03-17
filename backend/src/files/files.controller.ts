@@ -45,11 +45,17 @@ export class FilesController {
       );
     }
 
-    // Upload (file is already encrypted client-side)
+    // Upload encrypted file to Cloudinary
     const storageKey = `${uuidv4()}-${file.originalname}`;
-    await this.filesService.uploadFile(file.buffer, storageKey, file.mimetype);
+    const { url, publicId } = await this.filesService.uploadFile(
+      file.buffer,
+      storageKey,
+      file.mimetype,
+    );
 
     return {
+      fileUrl: url,
+      publicId,
       storageKey,
       name: file.originalname,
       size: file.size,
@@ -57,12 +63,15 @@ export class FilesController {
     };
   }
 
-  @Get(':key')
-  async downloadFile(@Param('key') key: string, @Res() res: Response) {
-    const fileBuffer = await this.filesService.downloadFile(key);
+  @Get('download')
+  @UseGuards(AuthGuard)
+  async downloadFile(
+    @Param('url') url: string,
+    @Res() res: Response,
+  ) {
+    const fileBuffer = await this.filesService.downloadFile(url);
     res.set({
       'Content-Type': 'application/octet-stream',
-      'Content-Disposition': `attachment; filename="${key}"`,
       'Content-Length': fileBuffer.length.toString(),
     });
     res.send(fileBuffer);

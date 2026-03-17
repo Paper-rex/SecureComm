@@ -67,7 +67,7 @@
 
 ### Layer 11: Data Protection
 - **MongoDB** — encrypted at rest (configurable)
-- **MinIO** — encrypted object storage
+- **Cloudinary** — encrypted file storage
 - **No plaintext storage** — all messages stored as ciphertext
 - **Minimal data exposure** — API returns only necessary fields
 

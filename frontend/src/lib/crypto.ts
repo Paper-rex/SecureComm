@@ -129,6 +129,24 @@ export async function decryptAESKeyWithRSA(
   );
 }
 
+// ─── AES Key Export/Import (for file metadata) ──────────────
+
+export async function exportAESKey(key: CryptoKey): Promise<string> {
+  const raw = await crypto.subtle.exportKey("raw", key);
+  return bufferToBase64(raw);
+}
+
+export async function importAESKey(base64Key: string): Promise<CryptoKey> {
+  const raw = base64ToBuffer(base64Key);
+  return crypto.subtle.importKey(
+    "raw",
+    raw,
+    { name: "AES-GCM", length: 256 },
+    true,
+    ["encrypt", "decrypt"]
+  );
+}
+
 // ─── File Encryption ─────────────────────────────────────────
 
 export async function encryptFile(

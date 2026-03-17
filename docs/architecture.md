@@ -38,7 +38,7 @@ SecureComm is a secure communication platform built with a modern microservices-
 │  ├── Chats (1:1 Conversations)                     │
 │  ├── Groups (RBAC: Creator/Admin/Member)           │
 │  ├── Messages (Encrypted Storage, Pagination)      │
-│  ├── Files (MinIO Upload/Download, Validation)     │
+│  ├── Files (Cloudinary Upload/Download, Validation)       │
 │  └── Gateway (WebSocket: Messaging, Typing, Status)│
 │                                                    │
 │  Intrusion Detection                               │
@@ -47,7 +47,7 @@ SecureComm is a secure communication platform built with a modern microservices-
 └─────────────────┬──────────────┬──────────────────┘
                   │              │
          ┌────────▼───┐   ┌─────▼──────┐
-         │  MongoDB    │   │   MinIO    │
+         │  MongoDB    │   │    Cloudinary     │
          │  (Data)     │   │  (Files)   │
          └─────────────┘   └────────────┘
 ```
@@ -62,7 +62,7 @@ SecureComm is a secure communication platform built with a modern microservices-
 | Auth | Clerk | Email login, 2FA, JWT tokens |
 | Backend | NestJS, TypeScript | REST API + WebSocket gateway |
 | Database | MongoDB + Mongoose | Document storage |
-| File Storage | MinIO (S3-compatible) | Encrypted file storage |
+| File Storage | Cloudinary | Encrypted file storage |
 | Real-time | Socket.io | WebSocket messaging |
 | Encryption | Web Crypto API | AES-256-GCM + RSA-OAEP |
 | Security | Helmet, ThrottlerGuard | Headers, rate limiting |
@@ -71,5 +71,5 @@ SecureComm is a secure communication platform built with a modern microservices-
 
 1. **Authentication**: User → Clerk → JWT Token → Backend Auth Guard
 2. **Messaging**: Plaintext → Client AES-256-GCM Encrypt → Server Store → WebSocket Relay → Client Decrypt
-3. **File Sharing**: File → Client AES-256-GCM Encrypt → Server Validate + Malware Scan → MinIO Store → Download → Client Decrypt
+3. **File Sharing**: File → Client AES-256-GCM Encrypt → Server Validate + Malware Scan → Cloudinary Store → Client Download → Client Decrypt
 4. **Key Exchange**: Sender → Generate AES Key → Encrypt with Recipient's RSA Public Key → Store per-user encrypted keys

@@ -8,7 +8,7 @@ Built with **Next.js 14**, **NestJS**, **Socket.IO**, and **MongoDB**.
 
 - **End-to-End Encryption**: AES-256-GCM for messages and files, protected by RSA-4096 key pairs.
 - **Real-Time Messaging**: Instant delivery via Socket.IO with delivery/read receipts.
-- **Secure File Sharing**: Encrypted uploads stored natively via MinIO (S3-compatible).
+- **Secure File Sharing**: Files encrypted client-side (AES-256-GCM) then stored in Cloudinary.
 - **Group Chats**: Fully featured role-based access control (Creator, Admin, Member).
 - **User Authentication**: Secure onboarding and identity management via Clerk.
 
@@ -24,7 +24,7 @@ Make sure you have the following installed on your machine:
 - [Node.js](https://nodejs.org/) (v18+)
 - [MongoDB](https://www.mongodb.com/) (Local or Atlas)
 - A [Clerk](https://clerk.com/) account for authentication keys
-- **MinIO** (S3-compatible storage for files) — See setup instructions below.
+- A [Cloudinary](https://cloudinary.com/) account for encrypted file storage (free tier available)
 
 ### 1. Clone the Repository
 
@@ -33,27 +33,11 @@ git clone https://github.com/Paper-rex/SecureComm.git
 cd SecureComm
 ```
 
-### 2. MinIO Storage Setup
+### 2. Cloudinary Storage Setup
 
-You need MinIO running locally to handle secure file uploads. You can run it either via Docker or standalone.
-
-#### Option A: Run with Docker (Recommended for Windows/Mac)
-```bash
-docker run -p 9000:9000 -p 9001:9001 -e "MINIO_ROOT_USER=minioadmin" -e "MINIO_ROOT_PASSWORD=minioadmin" minio/minio server /data --console-address ":9001"
-```
-
-#### Option B: Run Standalone (Without Docker)
-1. Download the MinIO executable for your OS from [MinIO Downloads](https://min.io/download).
-2. Create a data folder somewhere on your machine (e.g., `C:\minio-data`).
-3. Open a terminal and run:
-```bash
-# Windows
-minio.exe server C:\minio-data --console-address ":9001"
-# MacOS/Linux
-./minio server /path/to/data --console-address ":9001"
-```
-
-> **Important**: Once MinIO is running (via Docker or standalone), open the console at `http://localhost:9001`, log in with `minioadmin` / `minioadmin`, and **create a bucket named `securecomm-files`**.
+1. Create a free [Cloudinary](https://cloudinary.com/users/register_free) account.
+2. From the Cloudinary **Dashboard**, note your **Cloud Name**, **API Key**, and **API Secret**.
+3. These will be added to your `.env` file below.
 
 ### 3. Backend Setup
 
@@ -79,13 +63,10 @@ CLERK_SECRET_KEY=sk_test_...                      # From Clerk Dashboard
 CLERK_PUBLISHABLE_KEY=pk_test_...                 # From Clerk Dashboard
 CLERK_WEBHOOK_SECRET=whsec_...                    # Optional: For Webhooks
 
-# MinIO / S3 (Default local credentials)
-MINIO_ENDPOINT=localhost
-MINIO_PORT=9000
-MINIO_ACCESS_KEY=minioadmin
-MINIO_SECRET_KEY=minioadmin
-MINIO_BUCKET=securecomm-files
-MINIO_USE_SSL=false
+# Cloudinary Storage
+CLOUDINARY_CLOUD_NAME=your_cloud_name
+CLOUDINARY_API_KEY=your_api_key
+CLOUDINARY_API_SECRET=your_api_secret
 
 # Email (SMTP for Invites)
 SMTP_HOST=smtp.gmail.com

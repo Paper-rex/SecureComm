@@ -57,6 +57,9 @@ interface MessageData {
     size: number;
     mimeType: string;
     storageKey: string;
+    fileUrl?: string;
+    encryptionIv?: string;
+    encryptionKey?: string;
   };
   reactions: { userId: string; emoji: string }[];
   status: "sent" | "delivered" | "read";
@@ -209,15 +212,27 @@ export function ChatWindow({
     }
   };
 
-  const handleDownload = async (storageKey: string, fileName: string) => {
+  const handleDownload = async (
+    fileUrl: string,
+    fileName: string,
+    encryptionIv?: string,
+    encryptionKey?: string
+  ) => {
     try {
-      const token = await getToken();
-      const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/files/${storageKey}`,
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
+      // Download encrypted file directly from Cloudinary URL
+      const res = await fetch(fileUrl);
       if (!res.ok) throw new Error("Download failed");
-      const blob = await res.blob();
+
+      let fileData: ArrayBuffer | Blob = await res.arrayBuffer();
+
+      // Decrypt if encryption metadata is available
+      if (encryptionIv && encryptionKey) {
+        const { decryptFile, importAESKey } = await import("@/lib/crypto");
+        const aesKey = await importAESKey(encryptionKey);
+        fileData = await decryptFile(fileData, encryptionIv, aesKey);
+      }
+
+      const blob = new Blob([fileData]);
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -367,8 +382,10 @@ export function ChatWindow({
                               className="w-7 h-7 rounded-full"
                               onClick={() =>
                                 handleDownload(
-                                  msg.fileMetadata!.storageKey,
-                                  msg.fileMetadata!.name
+                                  msg.fileMetadata!.fileUrl || `${process.env.NEXT_PUBLIC_API_URL}/files/${msg.fileMetadata!.storageKey}`,
+                                  msg.fileMetadata!.name,
+                                  msg.fileMetadata!.encryptionIv,
+                                  msg.fileMetadata!.encryptionKey
                                 )
                               }
                             >

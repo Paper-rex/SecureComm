@@ -45,7 +45,7 @@ Server relays encrypted message via WebSocket
 User selects file
   ├── Generate random AES-256-GCM key
   ├── Encrypt entire file buffer with AES key
-  ├── Upload encrypted binary to MinIO
+  ├── Upload encrypted binary to Cloudinary
   ├── Encrypt AES key per recipient (same as message)
   └── Store { storageKey, encryptedKeys, iv } in message
 ```

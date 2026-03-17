@@ -23,6 +23,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { useAuth } from "@clerk/nextjs";
+import { encryptFile, exportAESKey } from "@/lib/crypto";
 
 interface FileUploadDialogProps {
   open: boolean;
@@ -108,15 +109,22 @@ export function FileUploadDialog({
     try {
       const token = await getToken();
 
-      // Stage 1: Upload file to backend
+      // Stage 1: Encrypt file client-side (AES-256-GCM)
       setUploadStage("Encrypting file (AES-256-GCM)...");
       setProgress(20);
 
-      const formData = new FormData();
-      formData.append("file", file);
+      const { encryptedData, iv, aesKey } = await encryptFile(file);
+      const exportedKey = await exportAESKey(aesKey);
 
+      // Stage 2: Upload encrypted blob to Cloudinary via backend
       setUploadStage("Uploading encrypted file...");
       setProgress(40);
+
+      const encryptedBlob = new Blob([encryptedData], {
+        type: "application/octet-stream",
+      });
+      const formData = new FormData();
+      formData.append("file", encryptedBlob, file.name);
 
       const uploadRes = await fetch(
         `${process.env.NEXT_PUBLIC_API_URL}/files/upload`,
@@ -139,7 +147,7 @@ export function FileUploadDialog({
       setUploadStage("Creating message...");
       setProgress(70);
 
-      // Stage 2: Create a file message in the chat
+      // Stage 3: Create a file message in the chat
       if (chatId) {
         const msgEndpoint = isGroup
           ? `${process.env.NEXT_PUBLIC_API_URL}/groups/${chatId}/messages`
@@ -161,6 +169,9 @@ export function FileUploadDialog({
               size: fileData.size,
               mimeType: fileData.mimeType,
               storageKey: fileData.storageKey,
+              fileUrl: fileData.fileUrl,
+              encryptionIv: iv,
+              encryptionKey: exportedKey,
             },
           }),
         });

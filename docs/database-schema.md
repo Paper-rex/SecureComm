@@ -63,7 +63,10 @@
     name:          String
     size:          Number
     mimeType:      String
-    storageKey:    String       // MinIO object key
+    storageKey:    String       // Cloudinary public_id
+    fileUrl:       String       // Cloudinary secure_url
+    encryptionIv:  String       // AES-GCM IV for file decryption
+    encryptionKey: String       // Exported AES key (Base64) for file decryption
   }
   reactions:       [{
     userId:        ObjectId
