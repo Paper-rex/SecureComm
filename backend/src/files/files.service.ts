@@ -85,6 +85,7 @@ export class FilesService {
       'application/msword',
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
       'application/zip', 'application/x-zip-compressed',
+      'application/octet-stream', // Required for client-side encrypted blobs
     ];
 
     if (size > MAX_SIZE) {
