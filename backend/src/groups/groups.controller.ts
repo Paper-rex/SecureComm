@@ -1,0 +1,174 @@
+import {
+  Controller,
+  Post,
+  Get,
+  Patch,
+  Delete,
+  Param,
+  Query,
+  Body,
+  UseGuards,
+  Req,
+  NotFoundException,
+} from '@nestjs/common';
+import { GroupsService } from './groups.service';
+import { MessagesService } from '../messages/messages.service';
+import { UsersService } from '../users/users.service';
+import { AuthGuard } from '../auth/auth.guard';
+
+@Controller('groups')
+@UseGuards(AuthGuard)
+export class GroupsController {
+  constructor(
+    private readonly groupsService: GroupsService,
+    private readonly messagesService: MessagesService,
+    private readonly usersService: UsersService,
+  ) {}
+
+  @Get()
+  async listGroups(@Req() req: any) {
+    const user = await this.usersService.findByClerkId(req.userId);
+    if (!user) throw new NotFoundException('User not found');
+    return this.groupsService.getUserGroups(user._id.toString());
+  }
+
+  @Post()
+  async createGroup(
+    @Req() req: any,
+    @Body() body: { name: string; description?: string; memberEmails: string[] },
+  ) {
+    const user = await this.usersService.findByClerkId(req.userId);
+    if (!user) throw new NotFoundException('User not found');
+
+    // Resolve member emails to IDs
+    const memberIds: string[] = [];
+    for (const email of body.memberEmails || []) {
+      const member = await this.usersService.searchByEmail(email);
+      if (member) memberIds.push(member._id.toString());
+    }
+
+    return this.groupsService.create(user._id.toString(), {
+      name: body.name,
+      description: body.description,
+      memberIds,
+    });
+  }
+
+  @Patch(':id')
+  async updateGroup(
+    @Req() req: any,
+    @Param('id') groupId: string,
+    @Body() body: { name?: string; description?: string; icon?: string },
+  ) {
+    const user = await this.usersService.findByClerkId(req.userId);
+    if (!user) throw new NotFoundException('User not found');
+    return this.groupsService.updateGroup(
+      groupId,
+      user._id.toString(),
+      body,
+    );
+  }
+
+  @Post(':id/members')
+  async addMember(
+    @Req() req: any,
+    @Param('id') groupId: string,
+    @Body() body: { email: string },
+  ) {
+    const user = await this.usersService.findByClerkId(req.userId);
+    if (!user) throw new NotFoundException('User not found');
+    const member = await this.usersService.searchByEmail(body.email);
+    if (!member) {
+      // Invite the user
+      await this.usersService.inviteUser(user.email, body.email);
+      return { invited: true, message: `Invitation sent to ${body.email}` };
+    }
+    return this.groupsService.addMember(
+      groupId,
+      user._id.toString(),
+      member._id.toString(),
+    );
+  }
+
+  @Delete(':id/members/:userId')
+  async removeMember(
+    @Req() req: any,
+    @Param('id') groupId: string,
+    @Param('userId') targetId: string,
+  ) {
+    const user = await this.usersService.findByClerkId(req.userId);
+    if (!user) throw new NotFoundException('User not found');
+    return this.groupsService.removeMember(
+      groupId,
+      user._id.toString(),
+      targetId,
+    );
+  }
+
+  @Patch(':id/admins')
+  async manageAdmin(
+    @Req() req: any,
+    @Param('id') groupId: string,
+    @Body() body: { userId: string; action: 'promote' | 'demote' },
+  ) {
+    const user = await this.usersService.findByClerkId(req.userId);
+    if (!user) throw new NotFoundException('User not found');
+    if (body.action === 'promote') {
+      return this.groupsService.promoteAdmin(
+        groupId,
+        user._id.toString(),
+        body.userId,
+      );
+    }
+    return this.groupsService.demoteAdmin(
+      groupId,
+      user._id.toString(),
+      body.userId,
+    );
+  }
+
+  @Get(':id/messages')
+  async getMessages(
+    @Param('id') groupId: string,
+    @Query('page') page: string,
+  ) {
+    return this.messagesService.getGroupMessages(
+      groupId,
+      parseInt(page || '1'),
+    );
+  }
+
+  @Post(':id/messages')
+  async sendMessage(
+    @Param('id') groupId: string,
+    @Req() req: any,
+    @Body()
+    body: {
+      encryptedContent: string;
+      iv: string;
+      encryptedKeys: Record<string, string>;
+      type?: string;
+      fileMetadata?: {
+        name: string;
+        size: number;
+        mimeType: string;
+        storageKey: string;
+      };
+    },
+  ) {
+    const user = await this.usersService.findByClerkId(req.userId);
+    if (!user) throw new NotFoundException('User not found');
+
+    const message = await this.messagesService.createMessage({
+      groupId,
+      senderId: user._id.toString(),
+      encryptedContent: body.encryptedContent,
+      iv: body.iv,
+      encryptedKeys: body.encryptedKeys || {},
+      type: body.type || 'text',
+      fileMetadata: body.fileMetadata,
+    });
+
+    return this.messagesService.getMessageById(message._id.toString());
+  }
+}
