@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, HttpException, HttpStatus } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { v2 as cloudinary } from 'cloudinary';
 import type { UploadApiResponse } from 'cloudinary';
@@ -54,12 +54,18 @@ export class FilesService {
    * Returns the file as a Buffer.
    */
   async downloadFile(fileUrl: string): Promise<Buffer> {
-    const response = await fetch(fileUrl);
-    if (!response.ok) {
-      throw new Error(`Failed to download file from Cloudinary: ${response.status}`);
+    try {
+      const response = await fetch(fileUrl);
+      if (!response.ok) {
+        throw new HttpException(`Failed to download file from Cloudinary: ${response.status} ${response.statusText}`, response.status === 404 ? HttpStatus.NOT_FOUND : HttpStatus.BAD_GATEWAY);
+      }
+      const arrayBuffer = await response.arrayBuffer();
+      return Buffer.from(arrayBuffer);
+    } catch (err: any) {
+      this.logger.error(`Error fetching file: ${fileUrl}`, err);
+      if (err instanceof HttpException) throw err;
+      throw new HttpException(`Network error fetching file: ${err.message}`, HttpStatus.INTERNAL_SERVER_ERROR);
     }
-    const arrayBuffer = await response.arrayBuffer();
-    return Buffer.from(arrayBuffer);
   }
 
   /**

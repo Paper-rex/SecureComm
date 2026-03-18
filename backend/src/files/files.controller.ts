@@ -7,7 +7,10 @@ import {
   UseInterceptors,
   UploadedFile,
   BadRequestException,
+  InternalServerErrorException,
+  HttpException,
   Res,
+  Logger,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import type { Response } from 'express';
@@ -17,6 +20,8 @@ import { v4 as uuidv4 } from 'uuid';
 
 @Controller('files')
 export class FilesController {
+  private readonly logger = new Logger(FilesController.name);
+
   constructor(private readonly filesService: FilesService) { }
 
   @Post('upload')
@@ -69,11 +74,23 @@ export class FilesController {
     @Query('url') url: string,
     @Res() res: Response,
   ) {
-    const fileBuffer = await this.filesService.downloadFile(url);
-    res.set({
-      'Content-Type': 'application/octet-stream',
-      'Content-Length': fileBuffer.length.toString(),
-    });
-    res.send(fileBuffer);
+    if (!url) {
+      throw new BadRequestException('URL query parameter is required');
+    }
+    this.logger.log(`Attempting to download file from URL: ${url}`);
+    try {
+      const fileBuffer = await this.filesService.downloadFile(url);
+      res.set({
+        'Content-Type': 'application/octet-stream',
+        'Content-Length': fileBuffer.length.toString(),
+      });
+      res.send(fileBuffer);
+    } catch (error) {
+      this.logger.error(`Download failed for URL ${url}`, error instanceof Error ? error.stack : String(error));
+      if (error instanceof HttpException) {
+        throw error;
+      }
+      throw new InternalServerErrorException(error instanceof Error ? error.message : 'Unknown error during file download');
+    }
   }
 }
