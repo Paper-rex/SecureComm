@@ -2,7 +2,7 @@ import {
   Controller,
   Post,
   Get,
-  Param,
+  Query,
   UseGuards,
   UseInterceptors,
   UploadedFile,
@@ -66,7 +66,7 @@ export class FilesController {
   @Get('download')
   @UseGuards(AuthGuard)
   async downloadFile(
-    @Param('url') url: string,
+    @Query('url') url: string,
     @Res() res: Response,
   ) {
     const fileBuffer = await this.filesService.downloadFile(url);
