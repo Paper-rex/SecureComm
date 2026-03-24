@@ -51,13 +51,46 @@ export class FilesService {
 
   /**
    * Download a file by its Cloudinary URL.
+   * Generates a signed URL to bypass Cloudinary's private raw file access control.
    * Returns the file as a Buffer.
    */
   async downloadFile(fileUrl: string): Promise<Buffer> {
     try {
-      const response = await fetch(fileUrl);
+      // Extract public_id from the Cloudinary URL
+      // URL format: https://res.cloudinary.com/{cloud}/raw/upload/v{version}/{folder}/{filename}
+      let downloadUrl = fileUrl;
+
+      try {
+        const urlObj = new URL(fileUrl);
+        const pathParts = urlObj.pathname.split('/');
+        // Find the index of 'upload' and take everything after the version segment
+        const uploadIndex = pathParts.indexOf('upload');
+        if (uploadIndex !== -1 && pathParts.length > uploadIndex + 2) {
+          // Skip 'upload' and the version (v1234567890) part
+          const afterUpload = pathParts.slice(uploadIndex + 2).join('/');
+          // Decode URI components (e.g., spaces encoded as %20)
+          const publicId = decodeURIComponent(afterUpload);
+
+          // Generate a signed URL with 1-hour expiry
+          downloadUrl = cloudinary.url(publicId, {
+            resource_type: 'raw',
+            type: 'upload',
+            sign_url: true,
+            secure: true,
+          });
+          this.logger.log(`Generated signed URL for public_id: ${publicId}`);
+        }
+      } catch (parseErr) {
+        this.logger.warn(`Could not parse Cloudinary URL, using original: ${parseErr}`);
+        // Fall through to use the original URL
+      }
+
+      const response = await fetch(downloadUrl);
       if (!response.ok) {
-        throw new HttpException(`Failed to download file from Cloudinary: ${response.status} ${response.statusText}`, response.status === 404 ? HttpStatus.NOT_FOUND : HttpStatus.BAD_GATEWAY);
+        throw new HttpException(
+          `Failed to download file from Cloudinary: ${response.status} ${response.statusText}`,
+          response.status === 404 ? HttpStatus.NOT_FOUND : HttpStatus.BAD_GATEWAY,
+        );
       }
       const arrayBuffer = await response.arrayBuffer();
       return Buffer.from(arrayBuffer);
