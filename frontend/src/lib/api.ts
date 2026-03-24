@@ -45,6 +45,9 @@ export const usersApi = {
 
   invite: (token: string, email: string) =>
     fetchWithAuth("/users/invite", { method: "POST", body: JSON.stringify({ email }) }, token),
+
+  deleteAccount: (token: string) =>
+    fetchWithAuth("/users/me", { method: "DELETE" }, token),
 };
 
 // ─── Chats ───────────────────────────────────────────────────
@@ -101,10 +104,13 @@ export const filesApi = {
     return response.json();
   },
 
-  download: async (token: string, fileKey: string) => {
-    const response = await fetch(`${API_URL}/files/${fileKey}`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
+  download: async (token: string, fileUrl: string) => {
+    const response = await fetch(
+      `${API_URL}/files/download?url=${encodeURIComponent(fileUrl)}`,
+      {
+        headers: { Authorization: `Bearer ${token}` },
+      }
+    );
     if (!response.ok) throw new Error("Download failed");
     return response.arrayBuffer();
   },

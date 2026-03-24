@@ -153,6 +153,9 @@ export class GroupsController {
         size: number;
         mimeType: string;
         storageKey: string;
+        fileUrl?: string;
+        encryptionIv?: string;
+        encryptionKey?: string;
       };
     },
   ) {

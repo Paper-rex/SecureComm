@@ -103,6 +103,9 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
         size: number;
         mimeType: string;
         storageKey: string;
+        fileUrl?: string;
+        encryptionIv?: string;
+        encryptionKey?: string;
       };
     },
   ) {
@@ -233,6 +236,35 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @MessageBody() data: { groupId: string },
   ) {
     socket.join(`group:${data.groupId}`);
+  }
+
+  // ─── Real-Time Profile & Group Updates ────────────────
+
+  @SubscribeMessage('user:update')
+  handleUserUpdate(
+    @ConnectedSocket() socket: Socket,
+    @MessageBody() data: { userId: string; displayName?: string; profilePicture?: string },
+  ) {
+    // Broadcast to all clients so sidebars can refresh
+    this.server.emit('user:updated', {
+      userId: data.userId,
+      displayName: data.displayName,
+      profilePicture: data.profilePicture,
+    });
+  }
+
+  @SubscribeMessage('group:update')
+  handleGroupUpdate(
+    @ConnectedSocket() socket: Socket,
+    @MessageBody() data: { groupId: string; name?: string; icon?: string; description?: string },
+  ) {
+    // Broadcast to all clients (group members will filter)
+    this.server.emit('group:updated', {
+      groupId: data.groupId,
+      name: data.name,
+      icon: data.icon,
+      description: data.description,
+    });
   }
 
   // ─── Intrusion Detection ─────────────────────────────

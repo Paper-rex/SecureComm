@@ -3,6 +3,7 @@ import {
   Post,
   Get,
   Patch,
+  Delete,
   Query,
   Param,
   Body,
@@ -90,5 +91,11 @@ export class UsersController {
   async getPublicKey(@Param('id') id: string) {
     const publicKey = await this.usersService.getPublicKey(id);
     return { publicKey };
+  }
+
+  @Delete('me')
+  async deleteAccount(@Req() req: any) {
+    await this.usersService.deleteUser(req.userId);
+    return { success: true, message: 'Account and all associated data deleted' };
   }
 }

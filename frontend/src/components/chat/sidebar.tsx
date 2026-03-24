@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Search,
@@ -23,6 +23,7 @@ import { UserSearchDialog } from "@/components/chat/user-search-dialog";
 import { CreateGroupDialog } from "@/components/group/create-group-dialog";
 import { useRouter, usePathname } from "next/navigation";
 import { useAuth } from "@clerk/nextjs";
+import { connectSocket, disconnectSocket } from "@/lib/socket";
 
 interface SidebarProps {
   onClose?: () => void;
@@ -83,9 +84,11 @@ export function Sidebar({ onClose }: SidebarProps) {
   const [loadingChats, setLoadingChats] = useState(true);
   const [loadingGroups, setLoadingGroups] = useState(true);
   const [myMongoId, setMyMongoId] = useState<string | null>(null);
+  const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({});
   const router = useRouter();
   const pathname = usePathname();
   const { getToken } = useAuth();
+  const socketConnected = useRef(false);
 
   // Fetch current user's MongoDB _id once
   const fetchMe = useCallback(async () => {
@@ -148,6 +151,89 @@ export function Sidebar({ onClose }: SidebarProps) {
     if (!searchOpen) fetchChats();
     if (!groupOpen) fetchGroups();
   }, [searchOpen, groupOpen, fetchChats, fetchGroups]);
+
+  // ─── WebSocket Connection for Real-Time Updates ─────────────
+  useEffect(() => {
+    let mounted = true;
+
+    const setupSocket = async () => {
+      try {
+        const token = await getToken();
+        if (!token || !mounted) return;
+
+        const socket = connectSocket(token);
+        socketConnected.current = true;
+
+        // New message received → increment unread + re-fetch list
+        socket.on("message:receive", (msg: any) => {
+          if (!mounted) return;
+          const conversationId = msg.chatId || msg.groupId;
+          if (!conversationId) return;
+
+          // Only increment if we're NOT currently viewing that conversation
+          const isViewing = pathname?.includes(conversationId);
+          if (!isViewing) {
+            setUnreadCounts((prev) => ({
+              ...prev,
+              [conversationId]: (prev[conversationId] || 0) + 1,
+            }));
+          }
+
+          // Re-fetch sidebar lists to update last message / ordering
+          fetchChats();
+          fetchGroups();
+        });
+
+        // User profile updated → re-fetch chats to get new name/picture
+        socket.on("user:updated", () => {
+          if (!mounted) return;
+          fetchChats();
+        });
+
+        // Group info updated → re-fetch groups to get new name/icon
+        socket.on("group:updated", () => {
+          if (!mounted) return;
+          fetchGroups();
+        });
+
+        // User online/offline → re-fetch chats for status dots
+        socket.on("user:online", () => {
+          if (!mounted) return;
+          fetchChats();
+        });
+      } catch (err) {
+        console.error("Failed to setup sidebar socket:", err);
+      }
+    };
+
+    setupSocket();
+
+    return () => {
+      mounted = false;
+      // Don't disconnect socket here since other components may use it
+    };
+  }, [getToken, pathname, fetchChats, fetchGroups]);
+
+  // ─── Clear unread when navigating to a conversation ──────────
+  useEffect(() => {
+    if (!pathname) return;
+
+    // Extract conversation ID from URL like /chat/{id} or /group/{id}
+    const chatMatch = pathname.match(/\/chat\/([a-f0-9]+)/);
+    const groupMatch = pathname.match(/\/group\/([a-f0-9]+)/);
+    const activeId = chatMatch?.[1] || groupMatch?.[1];
+
+    if (activeId) {
+      setUnreadCounts((prev) => {
+        if (prev[activeId]) {
+          const next = { ...prev };
+          delete next[activeId];
+          return next;
+        }
+        return prev;
+      });
+    }
+  }, [pathname]);
 
   const getOtherParticipant = (chat: ChatItem): Participant | null => {
     if (!myMongoId || !chat.participants) return chat.participants?.[0] || null;
@@ -243,6 +329,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                     const other = getOtherParticipant(chat);
                     if (!other) return null;
                     const isActive = pathname?.includes(chat._id);
+                    const unread = unreadCounts[chat._id] || 0;
                     return (
                       <motion.button
                         key={chat._id}
@@ -272,7 +359,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                         </div>
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center justify-between">
-                            <span className="font-medium text-sm truncate">{other.displayName}</span>
+                            <span className={`font-medium text-sm truncate ${unread > 0 ? "font-bold" : ""}`}>{other.displayName}</span>
                             <span className="text-[10px] text-muted-foreground flex-shrink-0 ml-2">
                               {chat.lastMessage?.timestamp
                                 ? getTimeAgo(chat.lastMessage.timestamp)
@@ -282,10 +369,15 @@ export function Sidebar({ onClose }: SidebarProps) {
                           <div className="flex items-center justify-between mt-0.5">
                             <div className="flex items-center gap-1 min-w-0">
                               <Lock className="w-3 h-3 text-primary/60 flex-shrink-0" />
-                              <span className="text-xs text-muted-foreground truncate">
+                              <span className={`text-xs truncate ${unread > 0 ? "text-foreground font-medium" : "text-muted-foreground"}`}>
                                 {chat.lastMessage?.text || "Start a conversation"}
                               </span>
                             </div>
+                            {unread > 0 && (
+                              <span className="flex-shrink-0 ml-2 min-w-[18px] h-[18px] flex items-center justify-center rounded-full bg-primary text-primary-foreground text-[10px] font-bold px-1">
+                                {unread > 99 ? "99+" : unread}
+                              </span>
+                            )}
                           </div>
                         </div>
                       </motion.button>
@@ -312,6 +404,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                 ) : (
                   filteredGroups.map((group, i) => {
                     const isActive = pathname?.includes(group._id);
+                    const unread = unreadCounts[group._id] || 0;
                     return (
                       <motion.button
                         key={group._id}
@@ -336,7 +429,7 @@ export function Sidebar({ onClose }: SidebarProps) {
                         </Avatar>
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center justify-between">
-                            <span className="font-medium text-sm truncate">{group.name}</span>
+                            <span className={`font-medium text-sm truncate ${unread > 0 ? "font-bold" : ""}`}>{group.name}</span>
                             <span className="text-[10px] text-muted-foreground flex-shrink-0 ml-2">
                               {group.lastMessage?.timestamp
                                 ? getTimeAgo(group.lastMessage.timestamp)
@@ -346,10 +439,15 @@ export function Sidebar({ onClose }: SidebarProps) {
                           <div className="flex items-center justify-between mt-0.5">
                             <div className="flex items-center gap-1 min-w-0">
                               <Hash className="w-3 h-3 text-muted-foreground/60 flex-shrink-0" />
-                              <span className="text-xs text-muted-foreground truncate">
+                              <span className={`text-xs truncate ${unread > 0 ? "text-foreground font-medium" : "text-muted-foreground"}`}>
                                 {group.lastMessage?.text || `${group.members?.length || 0} members`}
                               </span>
                             </div>
+                            {unread > 0 && (
+                              <span className="flex-shrink-0 ml-2 min-w-[18px] h-[18px] flex items-center justify-center rounded-full bg-primary text-primary-foreground text-[10px] font-bold px-1">
+                                {unread > 99 ? "99+" : unread}
+                              </span>
+                            )}
                           </div>
                         </div>
                       </motion.button>

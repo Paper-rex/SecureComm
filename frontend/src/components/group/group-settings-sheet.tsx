@@ -39,6 +39,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useAuth } from "@clerk/nextjs";
+import { getSocket } from "@/lib/socket";
 
 interface GroupSettingsSheetProps {
   open: boolean;
@@ -152,6 +153,18 @@ export function GroupSettingsSheet({ open, onOpenChange, groupId }: GroupSetting
       setEditing(false);
       // Refresh group data
       if (group) setGroup({ ...group, name: groupName, description: groupDesc, icon: groupIcon });
+      // Emit WebSocket event so other clients update in real time
+      try {
+        const socket = getSocket();
+        if (socket?.connected) {
+          socket.emit('group:update', {
+            groupId,
+            name: groupName,
+            description: groupDesc,
+            icon: groupIcon,
+          });
+        }
+      } catch { /* socket may not be connected */ }
     } catch (err) {
       console.error("Failed to update group:", err);
     }
@@ -203,6 +216,13 @@ export function GroupSettingsSheet({ open, onOpenChange, groupId }: GroupSetting
           body: JSON.stringify({ icon: iconUrl }),
         });
         if (group) setGroup({ ...group, icon: iconUrl });
+        // Emit WebSocket event
+        try {
+          const socket = getSocket();
+          if (socket?.connected) {
+            socket.emit('group:update', { groupId, icon: iconUrl });
+          }
+        } catch { /* socket may not be connected */ }
       }
     } catch (err) {
       console.error("Icon upload failed:", err);

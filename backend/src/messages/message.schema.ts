@@ -32,6 +32,9 @@ export class Message {
       size: Number,
       mimeType: String,
       storageKey: String,
+      fileUrl: String,
+      encryptionIv: String,
+      encryptionKey: String,
     },
   })
   fileMetadata: {
@@ -39,6 +42,9 @@ export class Message {
     size: number;
     mimeType: string;
     storageKey: string;
+    fileUrl?: string;
+    encryptionIv?: string;
+    encryptionKey?: string;
   };
 
   @Prop({

@@ -1,8 +1,11 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import { User, UserDocument } from './user.schema';
 import { Invitation, InvitationDocument } from './invitation.schema';
+import { Chat, ChatDocument } from '../chats/chat.schema';
+import { Group, GroupDocument } from '../groups/group.schema';
+import { Message, MessageDocument } from '../messages/message.schema';
 import { v4 as uuidv4 } from 'uuid';
 import * as nodemailer from 'nodemailer';
 
@@ -13,6 +16,9 @@ export class UsersService {
   constructor(
     @InjectModel(User.name) private userModel: Model<UserDocument>,
     @InjectModel(Invitation.name) private invitationModel: Model<InvitationDocument>,
+    @InjectModel(Chat.name) private chatModel: Model<ChatDocument>,
+    @InjectModel(Group.name) private groupModel: Model<GroupDocument>,
+    @InjectModel(Message.name) private messageModel: Model<MessageDocument>,
   ) {
     this.transporter = nodemailer.createTransport({
       host: process.env.SMTP_HOST || 'smtp.gmail.com',
@@ -115,5 +121,62 @@ export class UsersService {
 
   async findByClerkId(clerkId: string): Promise<UserDocument | null> {
     return this.userModel.findOne({ clerkId });
+  }
+
+  /**
+   * Delete a user and clean up all associated data:
+   * - Remove user from groups (transfer creator if needed)
+   * - Delete DM chats and their messages
+   * - Delete user's messages from groups
+   * - Delete invitations
+   * - Delete user document
+   */
+  async deleteUser(clerkId: string): Promise<void> {
+    const user = await this.userModel.findOne({ clerkId });
+    if (!user) throw new NotFoundException('User not found');
+
+    const uid = user._id as Types.ObjectId;
+
+    // 1) Remove user from all groups (transfer creator if needed)
+    const groups = await this.groupModel.find({ members: uid });
+    for (const group of groups) {
+      if (group.creator.equals(uid)) {
+        // Transfer creator to first admin or first member
+        const otherAdmins = group.admins.filter((a) => !a.equals(uid));
+        if (otherAdmins.length > 0) {
+          group.creator = otherAdmins[0];
+        } else {
+          const otherMembers = group.members.filter((m) => !m.equals(uid));
+          if (otherMembers.length > 0) {
+            group.creator = otherMembers[0];
+            group.admins.push(otherMembers[0]);
+          }
+        }
+      }
+      group.members = group.members.filter((m) => !m.equals(uid));
+      group.admins = group.admins.filter((a) => !a.equals(uid));
+
+      if (group.members.length === 0) {
+        await this.groupModel.deleteOne({ _id: group._id });
+        await this.messageModel.deleteMany({ groupId: group._id });
+      } else {
+        await group.save();
+      }
+    }
+
+    // 2) Delete DM chats and their messages
+    const chats = await this.chatModel.find({ participants: uid });
+    for (const chat of chats) {
+      await this.messageModel.deleteMany({ chatId: chat._id });
+      await this.chatModel.deleteOne({ _id: chat._id });
+    }
+
+    // 3) Clean up invitations
+    await this.invitationModel.deleteMany({
+      $or: [{ inviterEmail: user.email }, { inviteeEmail: user.email }],
+    });
+
+    // 4) Delete the user document
+    await this.userModel.deleteOne({ _id: uid });
   }
 }

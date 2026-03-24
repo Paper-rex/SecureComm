@@ -66,6 +66,9 @@ export class ChatsController {
         size: number;
         mimeType: string;
         storageKey: string;
+        fileUrl?: string;
+        encryptionIv?: string;
+        encryptionKey?: string;
       };
     },
   ) {
