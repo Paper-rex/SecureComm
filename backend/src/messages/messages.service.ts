@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, ForbiddenException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { Message, MessageDocument } from './message.schema';
@@ -44,9 +44,14 @@ export class MessagesService {
   async getChatMessages(
     chatId: string,
     page: number,
+    userId?: string,
   ): Promise<MessageDocument[]> {
+    const filter: any = { chatId: new Types.ObjectId(chatId) };
+    if (userId) {
+      filter.deletedFor = { $nin: [new Types.ObjectId(userId)] };
+    }
     return this.messageModel
-      .find({ chatId: new Types.ObjectId(chatId) })
+      .find(filter)
       .populate('sender', 'email displayName profilePicture')
       .sort({ createdAt: -1 })
       .skip((page - 1) * PAGE_SIZE)
@@ -64,9 +69,14 @@ export class MessagesService {
   async getGroupMessages(
     groupId: string,
     page: number,
+    userId?: string,
   ): Promise<MessageDocument[]> {
+    const filter: any = { groupId: new Types.ObjectId(groupId) };
+    if (userId) {
+      filter.deletedFor = { $nin: [new Types.ObjectId(userId)] };
+    }
     return this.messageModel
-      .find({ groupId: new Types.ObjectId(groupId) })
+      .find(filter)
       .populate('sender', 'email displayName profilePicture')
       .sort({ createdAt: -1 })
       .skip((page - 1) * PAGE_SIZE)
@@ -84,11 +94,13 @@ export class MessagesService {
     );
   }
 
+  // ─── Reactions ────────────────────────────────────────
+
   async addReaction(
     messageId: string,
     userId: string,
     emoji: string,
-  ): Promise<void> {
+  ): Promise<MessageDocument | null> {
     const uid = new Types.ObjectId(userId);
 
     // Remove existing reaction from same user, then add new
@@ -100,5 +112,46 @@ export class MessagesService {
       { _id: messageId },
       { $push: { reactions: { userId: uid, emoji } } },
     );
+    return this.getMessageById(messageId);
+  }
+
+  async removeReaction(
+    messageId: string,
+    userId: string,
+  ): Promise<MessageDocument | null> {
+    const uid = new Types.ObjectId(userId);
+    await this.messageModel.updateOne(
+      { _id: messageId },
+      { $pull: { reactions: { userId: uid } } },
+    );
+    return this.getMessageById(messageId);
+  }
+
+  // ─── Delete Messages ─────────────────────────────────
+
+  async deleteForMe(
+    messageId: string,
+    userId: string,
+  ): Promise<void> {
+    const uid = new Types.ObjectId(userId);
+    await this.messageModel.updateOne(
+      { _id: messageId },
+      { $addToSet: { deletedFor: uid } },
+    );
+  }
+
+  async deleteForEveryone(
+    messageId: string,
+    senderId: string,
+  ): Promise<void> {
+    const message = await this.messageModel.findById(messageId);
+    if (!message) return;
+
+    // Only the sender can delete for everyone
+    if (message.sender.toString() !== senderId) {
+      throw new ForbiddenException('Only the sender can delete for everyone');
+    }
+
+    await this.messageModel.deleteOne({ _id: messageId });
   }
 }

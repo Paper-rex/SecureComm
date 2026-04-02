@@ -14,6 +14,9 @@ export class Chat {
     timestamp: Date;
     senderId: string;
   };
+
+  @Prop({ type: [{ type: Types.ObjectId, ref: 'User' }], default: [] })
+  deletedBy: Types.ObjectId[];
 }
 
 export const ChatSchema = SchemaFactory.createForClass(Chat);

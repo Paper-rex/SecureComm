@@ -16,7 +16,16 @@ export class ChatsService {
       participants: { $all: [uid, pid] },
     });
 
-    if (existing) return existing;
+    if (existing) {
+      // If the chat was previously hidden by this user, unhide it
+      if (existing.deletedBy?.some((id: any) => id.toString() === userId)) {
+        await this.chatModel.updateOne(
+          { _id: existing._id },
+          { $pull: { deletedBy: uid } },
+        );
+      }
+      return existing;
+    }
 
     return this.chatModel.create({
       participants: [uid, pid],
@@ -26,7 +35,10 @@ export class ChatsService {
   async getUserChats(userId: string): Promise<ChatDocument[]> {
     const uid = new Types.ObjectId(userId);
     return this.chatModel
-      .find({ participants: uid })
+      .find({
+        participants: uid,
+        deletedBy: { $nin: [uid] },
+      })
       .populate('participants', 'email displayName profilePicture status')
       .sort({ 'lastMessage.timestamp': -1, createdAt: -1 })
       .exec();
@@ -39,7 +51,27 @@ export class ChatsService {
   ): Promise<void> {
     await this.chatModel.updateOne(
       { _id: chatId },
-      { lastMessage: { text, timestamp: new Date(), senderId } },
+      {
+        lastMessage: { text, timestamp: new Date(), senderId },
+        // Auto-unhide the chat for all participants when a new message arrives
+        deletedBy: [],
+      },
+    );
+  }
+
+  async deleteChat(chatId: string, userId: string): Promise<void> {
+    const uid = new Types.ObjectId(userId);
+    await this.chatModel.updateOne(
+      { _id: chatId, participants: uid },
+      { $addToSet: { deletedBy: uid } },
+    );
+  }
+
+  async unhideChat(chatId: string, userId: string): Promise<void> {
+    const uid = new Types.ObjectId(userId);
+    await this.chatModel.updateOne(
+      { _id: chatId },
+      { $pull: { deletedBy: uid } },
     );
   }
 }

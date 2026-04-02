@@ -133,10 +133,14 @@ export class GroupsController {
   async getMessages(
     @Param('id') groupId: string,
     @Query('page') page: string,
+    @Req() req: any,
   ) {
+    const user = await this.usersService.findByClerkId(req.userId);
+    if (!user) throw new NotFoundException('User not found');
     return this.messagesService.getGroupMessages(
       groupId,
       parseInt(page || '1'),
+      user._id.toString(),
     );
   }
 
@@ -180,5 +184,86 @@ export class GroupsController {
     this.chatGateway.emitNewMessage('group', groupId, populated);
 
     return populated;
+  }
+
+  // ─── Reactions ────────────────────────────────────────
+
+  @Post('messages/:messageId/reactions')
+  async addReaction(
+    @Param('messageId') messageId: string,
+    @Req() req: any,
+    @Body() body: { emoji: string },
+  ) {
+    const user = await this.usersService.findByClerkId(req.userId);
+    if (!user) throw new NotFoundException('User not found');
+    const updated = await this.messagesService.addReaction(
+      messageId,
+      user._id.toString(),
+      body.emoji,
+    );
+    if (updated) {
+      const chatId = updated.chatId?.toString();
+      const groupId = updated.groupId?.toString();
+      if (chatId) {
+        this.chatGateway.emitReactionUpdate('chat', chatId, messageId, updated.reactions);
+      } else if (groupId) {
+        this.chatGateway.emitReactionUpdate('group', groupId, messageId, updated.reactions);
+      }
+    }
+    return { success: true };
+  }
+
+  @Delete('messages/:messageId/reactions')
+  async removeReaction(
+    @Param('messageId') messageId: string,
+    @Req() req: any,
+  ) {
+    const user = await this.usersService.findByClerkId(req.userId);
+    if (!user) throw new NotFoundException('User not found');
+    const updated = await this.messagesService.removeReaction(
+      messageId,
+      user._id.toString(),
+    );
+    if (updated) {
+      const chatId = updated.chatId?.toString();
+      const groupId = updated.groupId?.toString();
+      if (chatId) {
+        this.chatGateway.emitReactionUpdate('chat', chatId, messageId, updated.reactions);
+      } else if (groupId) {
+        this.chatGateway.emitReactionUpdate('group', groupId, messageId, updated.reactions);
+      }
+    }
+    return { success: true };
+  }
+
+  // ─── Delete Message ───────────────────────────────────
+
+  @Delete('messages/:messageId')
+  async deleteMessage(
+    @Param('messageId') messageId: string,
+    @Query('mode') mode: string,
+    @Req() req: any,
+  ) {
+    const user = await this.usersService.findByClerkId(req.userId);
+    if (!user) throw new NotFoundException('User not found');
+
+    const message = await this.messagesService.getMessageById(messageId);
+    if (!message) throw new NotFoundException('Message not found');
+
+    const chatId = message.chatId?.toString();
+    const groupId = message.groupId?.toString();
+
+    if (mode === 'forEveryone') {
+      await this.messagesService.deleteForEveryone(messageId, user._id.toString());
+      const roomType = chatId ? 'chat' : 'group';
+      const roomId = chatId || groupId;
+      if (roomId) {
+        this.chatGateway.emitMessageDeleted(roomType as 'chat' | 'group', roomId, messageId);
+      }
+    } else {
+      await this.messagesService.deleteForMe(messageId, user._id.toString());
+    }
+
+    return { success: true };
   }
 }

@@ -11,6 +11,7 @@ import {
   Lock,
   MailPlus,
   Loader2,
+  Trash2,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -19,6 +20,22 @@ import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { UserSearchDialog } from "@/components/chat/user-search-dialog";
 import { CreateGroupDialog } from "@/components/group/create-group-dialog";
 import { useRouter, usePathname } from "next/navigation";
@@ -85,6 +102,11 @@ export function Sidebar({ onClose }: SidebarProps) {
   const [loadingGroups, setLoadingGroups] = useState(true);
   const [myMongoId, setMyMongoId] = useState<string | null>(null);
   const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({});
+  const [deleteChatDialog, setDeleteChatDialog] = useState<{ open: boolean; chatId: string; chatName: string }>({
+    open: false,
+    chatId: "",
+    chatName: "",
+  });
   const router = useRouter();
   const pathname = usePathname();
   const { getToken } = useAuth();
@@ -183,19 +205,10 @@ export function Sidebar({ onClose }: SidebarProps) {
         };
 
         // Global event from REST controllers (catches messages even when not in room)
+        // NOTE: Do NOT increment unread here — message:receive already handles it.
+        // This handler only re-fetches the list to update lastMessage / ordering.
         const handleSidebarNewMessage = (data: any) => {
           if (!mounted) return;
-          const conversationId = data.chatId || data.groupId;
-          if (!conversationId) return;
-
-          const isViewing = pathname?.includes(conversationId);
-          if (!isViewing) {
-            setUnreadCounts((prev) => ({
-              ...prev,
-              [conversationId]: (prev[conversationId] || 0) + 1,
-            }));
-          }
-
           fetchChats();
           fetchGroups();
         };
@@ -300,6 +313,29 @@ export function Sidebar({ onClose }: SidebarProps) {
     g.name?.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
+  // ─── Delete Chat Handler ─────────────────────────────
+  const handleDeleteChat = async (chatId: string) => {
+    // Optimistic removal
+    setChats((prev) => prev.filter((c) => c._id !== chatId));
+    setDeleteChatDialog({ open: false, chatId: "", chatName: "" });
+
+    // If currently viewing this chat, navigate away
+    if (pathname?.includes(chatId)) {
+      router.push("/chat");
+    }
+
+    try {
+      const token = await getToken();
+      await fetch(`${process.env.NEXT_PUBLIC_API_URL}/chats/${chatId}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+    } catch (err) {
+      console.error("Failed to delete chat:", err);
+      fetchChats(); // revert on error
+    }
+  };
+
   return (
     <div className="flex flex-col h-full w-full bg-card/30">
       {/* Search & Actions */}
@@ -375,56 +411,74 @@ export function Sidebar({ onClose }: SidebarProps) {
                     const isActive = pathname?.includes(chat._id);
                     const unread = unreadCounts[chat._id] || 0;
                     return (
-                      <motion.button
-                        key={chat._id}
-                        initial={{ opacity: 0, y: 10 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ delay: i * 0.05 }}
-                        onClick={() => {
-                          router.push(`/chat/${chat._id}`);
-                          onClose?.();
-                        }}
-                        className={`w-full flex items-center gap-3 p-3 rounded-xl transition-all duration-200 text-left group ${
-                          isActive
-                            ? "bg-primary/10 border border-primary/20"
-                            : "hover:bg-muted/50"
-                        }`}
-                      >
-                        <div className="relative flex-shrink-0">
-                          <Avatar className="w-10 h-10">
-                            <AvatarImage src={other.profilePicture} />
-                            <AvatarFallback className="bg-primary/10 text-primary text-sm font-medium">
-                              {other.displayName?.split(" ").map((n) => n[0]).join("").slice(0, 2) || "?"}
-                            </AvatarFallback>
-                          </Avatar>
-                          {other.status === "online" && (
-                            <span className="absolute bottom-0 right-0 w-3 h-3 bg-emerald-500 border-2 border-card rounded-full" />
-                          )}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center justify-between">
-                            <span className={`font-medium text-sm truncate ${unread > 0 ? "font-bold" : ""}`}>{other.displayName}</span>
-                            <span className="text-[10px] text-muted-foreground flex-shrink-0 ml-2">
-                              {chat.lastMessage?.timestamp
-                                ? getTimeAgo(chat.lastMessage.timestamp)
-                                : getTimeAgo(chat.updatedAt)}
-                            </span>
-                          </div>
-                          <div className="flex items-center justify-between mt-0.5">
-                            <div className="flex items-center gap-1 min-w-0">
-                              <Lock className="w-3 h-3 text-primary/60 flex-shrink-0" />
-                              <span className={`text-xs truncate ${unread > 0 ? "text-foreground font-medium" : "text-muted-foreground"}`}>
-                                {chat.lastMessage?.text || "Start a conversation"}
-                              </span>
+                      <ContextMenu key={chat._id}>
+                        <ContextMenuTrigger asChild>
+                          <motion.button
+                            initial={{ opacity: 0, y: 10 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            transition={{ delay: i * 0.05 }}
+                            onClick={() => {
+                              router.push(`/chat/${chat._id}`);
+                              onClose?.();
+                            }}
+                            className={`w-full flex items-center gap-3 p-3 rounded-xl transition-all duration-200 text-left group ${
+                              isActive
+                                ? "bg-primary/10 border border-primary/20"
+                                : "hover:bg-muted/50"
+                            }`}
+                          >
+                            <div className="relative flex-shrink-0">
+                              <Avatar className="w-10 h-10">
+                                <AvatarImage src={other.profilePicture} />
+                                <AvatarFallback className="bg-primary/10 text-primary text-sm font-medium">
+                                  {other.displayName?.split(" ").map((n) => n[0]).join("").slice(0, 2) || "?"}
+                                </AvatarFallback>
+                              </Avatar>
+                              {other.status === "online" && (
+                                <span className="absolute bottom-0 right-0 w-3 h-3 bg-emerald-500 border-2 border-card rounded-full" />
+                              )}
                             </div>
-                            {unread > 0 && (
-                              <span className="flex-shrink-0 ml-2 min-w-[18px] h-[18px] flex items-center justify-center rounded-full bg-primary text-primary-foreground text-[10px] font-bold px-1">
-                                {unread > 99 ? "99+" : unread}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      </motion.button>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center justify-between">
+                                <span className={`font-medium text-sm truncate ${unread > 0 ? "font-bold" : ""}`}>{other.displayName}</span>
+                                <span className="text-[10px] text-muted-foreground flex-shrink-0 ml-2">
+                                  {chat.lastMessage?.timestamp
+                                    ? getTimeAgo(chat.lastMessage.timestamp)
+                                    : getTimeAgo(chat.updatedAt)}
+                                </span>
+                              </div>
+                              <div className="flex items-center justify-between mt-0.5">
+                                <div className="flex items-center gap-1 min-w-0">
+                                  <Lock className="w-3 h-3 text-primary/60 flex-shrink-0" />
+                                  <span className={`text-xs truncate ${unread > 0 ? "text-foreground font-medium" : "text-muted-foreground"}`}>
+                                    {chat.lastMessage?.text || "Start a conversation"}
+                                  </span>
+                                </div>
+                                {unread > 0 && (
+                                  <span className="flex-shrink-0 ml-2 min-w-[18px] h-[18px] flex items-center justify-center rounded-full bg-primary text-primary-foreground text-[10px] font-bold px-1">
+                                    {unread > 99 ? "99+" : unread}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </motion.button>
+                        </ContextMenuTrigger>
+                        <ContextMenuContent className="w-48">
+                          <ContextMenuItem
+                            onClick={() =>
+                              setDeleteChatDialog({
+                                open: true,
+                                chatId: chat._id,
+                                chatName: other.displayName || "this chat",
+                              })
+                            }
+                            className="text-destructive focus:text-destructive"
+                          >
+                            <Trash2 className="w-4 h-4 mr-2" />
+                            Delete chat
+                          </ContextMenuItem>
+                        </ContextMenuContent>
+                      </ContextMenu>
                     );
                   })
                 )}
@@ -515,6 +569,32 @@ export function Sidebar({ onClose }: SidebarProps) {
       {/* Dialogs */}
       <UserSearchDialog open={searchOpen} onOpenChange={setSearchOpen} />
       <CreateGroupDialog open={groupOpen} onOpenChange={setGroupOpen} />
+
+      {/* Delete Chat Confirmation */}
+      <AlertDialog
+        open={deleteChatDialog.open}
+        onOpenChange={(open) =>
+          setDeleteChatDialog((prev) => ({ ...prev, open }))
+        }
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete chat with {deleteChatDialog.chatName}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This chat will be removed from your list. You can still find it if the other person messages you again.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => handleDeleteChat(deleteChatDialog.chatId)}
+              className="bg-destructive/10 text-destructive hover:bg-destructive/20"
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

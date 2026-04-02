@@ -53,6 +53,9 @@ export class Message {
   })
   reactions: { userId: Types.ObjectId; emoji: string }[];
 
+  @Prop({ type: [{ type: Types.ObjectId, ref: 'User' }], default: [] })
+  deletedFor: Types.ObjectId[];
+
   @Prop({ default: 'sent', enum: ['sent', 'delivered', 'read'] })
   status: string;
 }

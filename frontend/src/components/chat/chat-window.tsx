@@ -14,6 +14,8 @@ import {
   Image,
   Download,
   Loader2,
+  Trash2,
+  SmilePlus,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -29,6 +31,26 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { FileUploadDialog } from "@/components/chat/file-upload-dialog";
 import { useAuth } from "@clerk/nextjs";
 
@@ -94,6 +116,12 @@ export function ChatWindow({
   const [sending, setSending] = useState(false);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
   const [fileDialogOpen, setFileDialogOpen] = useState(false);
+  const [deleteDialog, setDeleteDialog] = useState<{
+    open: boolean;
+    messageId: string;
+    mode: "forMe" | "forEveryone";
+    isSender: boolean;
+  }>({ open: false, messageId: "", mode: "forMe", isSender: false });
   const scrollRef = useRef<HTMLDivElement>(null);
   const { getToken } = useAuth();
 
@@ -129,6 +157,58 @@ export function ChatWindow({
 
     return () => clearInterval(interval);
   }, [fetchMessages]);
+
+  // ─── Socket listeners for real-time updates ──────────
+  useEffect(() => {
+    let mounted = true;
+
+    const setupListeners = async () => {
+      try {
+        const { getSocket } = await import("@/lib/socket");
+        const socket = getSocket();
+        if (!socket?.connected) return;
+
+        const handleMessageDeleted = (data: { messageId: string }) => {
+          if (!mounted) return;
+          setMessages((prev) => prev.filter((m) => m._id !== data.messageId));
+        };
+
+        const handleReactionUpdate = (data: {
+          messageId: string;
+          reactions: { userId: string; emoji: string }[];
+        }) => {
+          if (!mounted) return;
+          setMessages((prev) =>
+            prev.map((m) =>
+              m._id === data.messageId
+                ? { ...m, reactions: data.reactions }
+                : m
+            )
+          );
+        };
+
+        socket.on("message:deleted", handleMessageDeleted);
+        socket.on("reaction:update", handleReactionUpdate);
+
+        return () => {
+          socket.off("message:deleted", handleMessageDeleted);
+          socket.off("reaction:update", handleReactionUpdate);
+        };
+      } catch {
+        /* socket may not exist */
+      }
+    };
+
+    let cleanup: (() => void) | undefined;
+    setupListeners().then((fn) => {
+      cleanup = fn;
+    });
+
+    return () => {
+      mounted = false;
+      cleanup?.();
+    };
+  }, [chatId]);
 
   const scrollToBottom = () => {
     scrollRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -177,38 +257,102 @@ export function ChatWindow({
     }
   };
 
-  const addReaction = async (messageId: string, emoji: string) => {
-    // Optimistic update
-    setMessages((prev) =>
-      prev.map((m) =>
-        m._id === messageId
-          ? {
-              ...m,
-              reactions: [
-                ...(m.reactions || []).filter((r) => r.userId !== myMongoId),
-                { userId: myMongoId || "", emoji },
-              ],
-            }
-          : m
-      )
+  // ─── Reaction Toggle (add or remove) ─────────────────
+
+  const toggleReaction = async (messageId: string, emoji: string) => {
+    const msg = messages.find((m) => m._id === messageId);
+    const existingReaction = msg?.reactions?.find(
+      (r) => r.userId === myMongoId && r.emoji === emoji
     );
 
-    // Persist to backend
+    if (existingReaction) {
+      // Remove reaction (optimistic)
+      setMessages((prev) =>
+        prev.map((m) =>
+          m._id === messageId
+            ? {
+                ...m,
+                reactions: (m.reactions || []).filter(
+                  (r) => !(r.userId === myMongoId && r.emoji === emoji)
+                ),
+              }
+            : m
+        )
+      );
+
+      try {
+        const token = await getToken();
+        const base = isGroup ? "groups" : "chats";
+        await fetch(
+          `${process.env.NEXT_PUBLIC_API_URL}/${base}/messages/${messageId}/reactions`,
+          {
+            method: "DELETE",
+            headers: { Authorization: `Bearer ${token}` },
+          }
+        );
+      } catch (err) {
+        console.error("Failed to remove reaction:", err);
+        fetchMessages(); // revert on error
+      }
+    } else {
+      // Add reaction (optimistic)
+      setMessages((prev) =>
+        prev.map((m) =>
+          m._id === messageId
+            ? {
+                ...m,
+                reactions: [
+                  ...(m.reactions || []).filter((r) => r.userId !== myMongoId),
+                  { userId: myMongoId || "", emoji },
+                ],
+              }
+            : m
+        )
+      );
+
+      try {
+        const token = await getToken();
+        const base = isGroup ? "groups" : "chats";
+        await fetch(
+          `${process.env.NEXT_PUBLIC_API_URL}/${base}/messages/${messageId}/reactions`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({ emoji }),
+          }
+        );
+      } catch (err) {
+        console.error("Failed to add reaction:", err);
+        fetchMessages(); // revert on error
+      }
+    }
+  };
+
+  // ─── Delete Message ──────────────────────────────────
+
+  const handleDeleteMessage = async (
+    messageId: string,
+    mode: "forMe" | "forEveryone"
+  ) => {
+    // Optimistic removal
+    setMessages((prev) => prev.filter((m) => m._id !== messageId));
+
     try {
       const token = await getToken();
+      const base = isGroup ? "groups" : "chats";
       await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL}/chats/messages/${messageId}/reactions`,
+        `${process.env.NEXT_PUBLIC_API_URL}/${base}/messages/${messageId}?mode=${mode}`,
         {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify({ emoji }),
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${token}` },
         }
       );
     } catch (err) {
-      console.error("Failed to add reaction:", err);
+      console.error("Failed to delete message:", err);
+      fetchMessages(); // revert on error
     }
   };
 
@@ -220,14 +364,17 @@ export function ChatWindow({
   ) => {
     try {
       const token = await getToken();
-      
+
       // Proxy the download through our backend to bypass strict CORS blocks from Cloudinary
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/files/download?url=${encodeURIComponent(fileUrl)}`, {
-        headers: {
-          Authorization: `Bearer ${token}`
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/files/download?url=${encodeURIComponent(fileUrl)}`,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
         }
-      });
-      
+      );
+
       if (!res.ok) {
         const errText = await res.text().catch(() => "Unknown error");
         throw new Error(`Download API failed: ${res.status} - ${errText}`);
@@ -243,7 +390,9 @@ export function ChatWindow({
           fileData = await decryptFile(fileData, encryptionIv, aesKey);
         } catch (decryptErr) {
           console.error("Decryption failed:", decryptErr);
-          throw new Error("Failed to decrypt the file. The key might be invalid.");
+          throw new Error(
+            "Failed to decrypt the file. The key might be invalid."
+          );
         }
       }
 
@@ -258,7 +407,6 @@ export function ChatWindow({
       URL.revokeObjectURL(url);
     } catch (err: any) {
       console.error("Failed to download file:", err);
-      // Let the user know exactly why it failed via alert (since no toast is imported)
       alert(err.message || "Failed to download file");
     }
   };
@@ -275,7 +423,12 @@ export function ChatWindow({
   };
 
   const getInitials = (name: string) =>
-    name?.split(" ").map((n) => n[0]).join("").slice(0, 2).toUpperCase() || "?";
+    name
+      ?.split(" ")
+      .map((n) => n[0])
+      .join("")
+      .slice(0, 2)
+      .toUpperCase() || "?";
 
   const isSelf = (msg: MessageData) => {
     if (!myMongoId) return false;
@@ -294,6 +447,70 @@ export function ChatWindow({
     }
   };
 
+  // ─── Render a single message bubble ──────────────────
+
+  const renderMessageContent = (msg: MessageData, self: boolean) => {
+    if (msg.type === "file" && msg.fileMetadata) {
+      return (
+        <div
+          className={`rounded-2xl p-3 border ${
+            self
+              ? "bg-primary text-primary-foreground border-primary/50 rounded-br-md"
+              : "bg-card border-border/50 rounded-bl-md"
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            {msg.fileMetadata.mimeType?.startsWith("image/") ? (
+              <Image className="w-8 h-8 text-primary/60" />
+            ) : (
+              <FileText className="w-8 h-8 text-primary/60" />
+            )}
+            <div className="flex-1 min-w-0">
+              <p className="text-xs font-medium truncate">
+                {msg.fileMetadata.name}
+              </p>
+              <p
+                className={`text-[10px] ${self ? "text-primary-foreground/70" : "text-muted-foreground"}`}
+              >
+                {formatFileSize(msg.fileMetadata.size)}
+              </p>
+            </div>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="w-7 h-7 rounded-full"
+              onClick={() =>
+                handleDownload(
+                  msg.fileMetadata!.fileUrl ||
+                    `${process.env.NEXT_PUBLIC_API_URL}/files/${msg.fileMetadata!.storageKey}`,
+                  msg.fileMetadata!.name,
+                  msg.fileMetadata!.encryptionIv,
+                  msg.fileMetadata!.encryptionKey
+                )
+              }
+            >
+              <Download className="w-3.5 h-3.5" />
+            </Button>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div
+        className={`rounded-2xl px-3.5 py-2 ${
+          self
+            ? "bg-primary text-primary-foreground rounded-br-md"
+            : "bg-card border border-border/50 rounded-bl-md"
+        }`}
+      >
+        <p className="text-sm leading-relaxed whitespace-pre-wrap">
+          {decodeContent(msg.encryptedContent)}
+        </p>
+      </div>
+    );
+  };
+
   return (
     <div className="flex flex-col h-full">
       {/* Chat Header */}
@@ -301,8 +518,12 @@ export function ChatWindow({
         <div className="flex items-center gap-3">
           <Avatar className="w-10 h-10 border border-border/50">
             <AvatarImage src={chatAvatar} />
-            <AvatarFallback className={`${isGroup ? "bg-amber-500/10 text-amber-500" : "bg-primary/10 text-primary"} text-sm font-medium`}>
-              {isGroup ? chatAvatar || getInitials(chatName) : getInitials(chatName)}
+            <AvatarFallback
+              className={`${isGroup ? "bg-amber-500/10 text-amber-500" : "bg-primary/10 text-primary"} text-sm font-medium`}
+            >
+              {isGroup
+                ? chatAvatar || getInitials(chatName)
+                : getInitials(chatName)}
             </AvatarFallback>
           </Avatar>
           <div>
@@ -335,7 +556,8 @@ export function ChatWindow({
         <div className="flex justify-center mb-4">
           <div className="text-[10px] text-muted-foreground/60 bg-muted/30 px-3 py-1.5 rounded-full flex items-center gap-1.5">
             <Lock className="w-3 h-3" />
-            Messages are end-to-end encrypted. No one outside this chat can read them.
+            Messages are end-to-end encrypted. No one outside this chat can read
+            them.
           </div>
         </div>
 
@@ -356,110 +578,188 @@ export function ChatWindow({
                   key={msg._id}
                   initial={{ opacity: 0, y: 10, scale: 0.98 }}
                   animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.95, height: 0 }}
                   transition={{ duration: 0.2 }}
                   className={`flex gap-2 ${self ? "flex-row-reverse" : ""}`}
                 >
                   <Avatar className="w-7 h-7 flex-shrink-0 mt-1 border border-border/50">
                     <AvatarImage src={msg.sender?.profilePicture} />
                     <AvatarFallback className="bg-primary/10 text-primary text-[10px] font-medium">
-                      {getInitials(msg.sender?.displayName || msg.sender?.email || "?")}
+                      {getInitials(
+                        msg.sender?.displayName || msg.sender?.email || "?"
+                      )}
                     </AvatarFallback>
                   </Avatar>
-                  <div className={`max-w-[70%] flex flex-col ${self ? "items-end" : "items-start"}`}>
+                  <div
+                    className={`max-w-[70%] flex flex-col ${self ? "items-end" : "items-start"}`}
+                  >
                     {isGroup && !self && (
                       <span className="text-[10px] text-muted-foreground ml-1 mb-0.5 block">
                         {msg.sender?.displayName}
                       </span>
                     )}
 
-                    <div className="relative group">
-                      {msg.type === "file" && msg.fileMetadata ? (
-                        <div
-                          className={`rounded-2xl p-3 border ${
-                            self
-                              ? "bg-primary text-primary-foreground border-primary/50 rounded-br-md"
-                              : "bg-card border-border/50 rounded-bl-md"
-                          }`}
-                        >
-                          <div className="flex items-center gap-2">
-                            {msg.fileMetadata.mimeType?.startsWith("image/") ? (
-                              <Image className="w-8 h-8 text-primary/60" />
-                            ) : (
-                              <FileText className="w-8 h-8 text-primary/60" />
-                            )}
-                            <div className="flex-1 min-w-0">
-                              <p className="text-xs font-medium truncate">{msg.fileMetadata.name}</p>
-                              <p className={`text-[10px] ${self ? "text-primary-foreground/70" : "text-muted-foreground"}`}>
-                                {formatFileSize(msg.fileMetadata.size)}
-                              </p>
-                            </div>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="w-7 h-7 rounded-full"
-                              onClick={() =>
-                                handleDownload(
-                                  msg.fileMetadata!.fileUrl || `${process.env.NEXT_PUBLIC_API_URL}/files/${msg.fileMetadata!.storageKey}`,
-                                  msg.fileMetadata!.name,
-                                  msg.fileMetadata!.encryptionIv,
-                                  msg.fileMetadata!.encryptionKey
-                                )
-                              }
+                    <ContextMenu>
+                      <ContextMenuTrigger asChild>
+                        <div className="relative group cursor-default">
+                          {renderMessageContent(msg, self)}
+
+                          {msg.reactions?.length > 0 && (
+                            <div
+                              className={`flex gap-0.5 mt-0.5 flex-wrap ${self ? "justify-end" : ""}`}
                             >
-                              <Download className="w-3.5 h-3.5" />
-                            </Button>
+                              {/* Group reactions by emoji */}
+                              {Object.entries(
+                                (msg.reactions || []).reduce(
+                                  (acc, r) => {
+                                    acc[r.emoji] = acc[r.emoji] || [];
+                                    acc[r.emoji].push(r.userId);
+                                    return acc;
+                                  },
+                                  {} as Record<string, string[]>
+                                )
+                              ).map(([emoji, userIds]) => {
+                                const myReaction = userIds.includes(
+                                  myMongoId || ""
+                                );
+                                return (
+                                  <button
+                                    key={emoji}
+                                    onClick={() =>
+                                      toggleReaction(msg._id, emoji)
+                                    }
+                                    className={`text-xs rounded-full px-1.5 py-0.5 border transition-colors ${
+                                      myReaction
+                                        ? "bg-primary/15 border-primary/40 text-foreground"
+                                        : "bg-muted/50 border-border/30 hover:bg-muted"
+                                    }`}
+                                  >
+                                    {emoji}{" "}
+                                    {userIds.length > 1 && (
+                                      <span className="text-[10px] text-muted-foreground">
+                                        {userIds.length}
+                                      </span>
+                                    )}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          )}
+
+                          {/* Hover emoji picker */}
+                          <div
+                            className={`absolute top-0 ${self ? "left-0 -translate-x-full pr-1" : "right-0 translate-x-full pl-1"} opacity-0 group-hover:opacity-100 transition-opacity`}
+                          >
+                            <Popover>
+                              <PopoverTrigger className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-card shadow-sm border border-border/50 hover:bg-accent">
+                                <Smile className="w-3 h-3 text-muted-foreground" />
+                              </PopoverTrigger>
+                              <PopoverContent
+                                className="w-auto p-1.5"
+                                align={self ? "end" : "start"}
+                              >
+                                <div className="flex gap-1">
+                                  {emojis.map((emoji) => {
+                                    const hasReaction = msg.reactions?.some(
+                                      (r) =>
+                                        r.userId === myMongoId &&
+                                        r.emoji === emoji
+                                    );
+                                    return (
+                                      <button
+                                        key={emoji}
+                                        onClick={() =>
+                                          toggleReaction(msg._id, emoji)
+                                        }
+                                        className={`w-7 h-7 flex items-center justify-center rounded transition-colors text-base ${
+                                          hasReaction
+                                            ? "bg-primary/20 ring-1 ring-primary/40"
+                                            : "hover:bg-muted"
+                                        }`}
+                                      >
+                                        {emoji}
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              </PopoverContent>
+                            </Popover>
                           </div>
                         </div>
-                      ) : (
-                        <div
-                          className={`rounded-2xl px-3.5 py-2 ${
-                            self
-                              ? "bg-primary text-primary-foreground rounded-br-md"
-                              : "bg-card border border-border/50 rounded-bl-md"
-                          }`}
-                        >
-                          <p className="text-sm leading-relaxed whitespace-pre-wrap">
-                            {decodeContent(msg.encryptedContent)}
-                          </p>
-                        </div>
-                      )}
+                      </ContextMenuTrigger>
 
-                      {msg.reactions?.length > 0 && (
-                        <div className={`flex gap-0.5 mt-0.5 ${self ? "justify-end" : ""}`}>
-                          {msg.reactions.map((r, idx) => (
-                            <span
-                              key={idx}
-                              className="text-xs bg-muted/50 rounded-full px-1.5 py-0.5 border border-border/30"
-                            >
-                              {r.emoji}
-                            </span>
-                          ))}
-                        </div>
-                      )}
-
-                      <div className={`absolute top-0 ${self ? "left-0 -translate-x-full pr-1" : "right-0 translate-x-full pl-1"} opacity-0 group-hover:opacity-100 transition-opacity`}>
-                        <Popover>
-                          <PopoverTrigger className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-card shadow-sm border border-border/50 hover:bg-accent">
-                            <Smile className="w-3 h-3 text-muted-foreground" />
-                          </PopoverTrigger>
-                          <PopoverContent className="w-auto p-1.5" align={self ? "end" : "start"}>
+                      <ContextMenuContent className="w-48">
+                        <ContextMenuSub>
+                          <ContextMenuSubTrigger>
+                            <SmilePlus className="w-4 h-4 mr-2" />
+                            React
+                          </ContextMenuSubTrigger>
+                          <ContextMenuSubContent className="p-1.5">
                             <div className="flex gap-1">
-                              {emojis.map((emoji) => (
-                                <button
-                                  key={emoji}
-                                  onClick={() => addReaction(msg._id, emoji)}
-                                  className="w-7 h-7 flex items-center justify-center rounded hover:bg-muted transition-colors text-base"
-                                >
-                                  {emoji}
-                                </button>
-                              ))}
+                              {emojis.map((emoji) => {
+                                const hasReaction = msg.reactions?.some(
+                                  (r) =>
+                                    r.userId === myMongoId && r.emoji === emoji
+                                );
+                                return (
+                                  <button
+                                    key={emoji}
+                                    onClick={() =>
+                                      toggleReaction(msg._id, emoji)
+                                    }
+                                    className={`w-7 h-7 flex items-center justify-center rounded transition-colors text-base ${
+                                      hasReaction
+                                        ? "bg-primary/20 ring-1 ring-primary/40"
+                                        : "hover:bg-muted"
+                                    }`}
+                                  >
+                                    {emoji}
+                                  </button>
+                                );
+                              })}
                             </div>
-                          </PopoverContent>
-                        </Popover>
-                      </div>
-                    </div>
+                          </ContextMenuSubContent>
+                        </ContextMenuSub>
 
-                    <div className={`flex items-center gap-1 mt-0.5 px-1 ${self ? "justify-end" : ""}`}>
+                        <ContextMenuSeparator />
+
+                        <ContextMenuItem
+                          onClick={() =>
+                            setDeleteDialog({
+                              open: true,
+                              messageId: msg._id,
+                              mode: "forMe",
+                              isSender: self,
+                            })
+                          }
+                          className="text-destructive focus:text-destructive"
+                        >
+                          <Trash2 className="w-4 h-4 mr-2" />
+                          Delete for me
+                        </ContextMenuItem>
+
+                        {self && (
+                          <ContextMenuItem
+                            onClick={() =>
+                              setDeleteDialog({
+                                open: true,
+                                messageId: msg._id,
+                                mode: "forEveryone",
+                                isSender: self,
+                              })
+                            }
+                            className="text-destructive focus:text-destructive"
+                          >
+                            <Trash2 className="w-4 h-4 mr-2" />
+                            Delete for everyone
+                          </ContextMenuItem>
+                        )}
+                      </ContextMenuContent>
+                    </ContextMenu>
+
+                    <div
+                      className={`flex items-center gap-1 mt-0.5 px-1 ${self ? "justify-end" : ""}`}
+                    >
                       <span className="text-[10px] text-muted-foreground/60">
                         {formatTime(msg.createdAt)}
                       </span>
@@ -544,6 +844,43 @@ export function ChatWindow({
         isGroup={isGroup}
         onFileSent={fetchMessages}
       />
+
+      {/* Delete Confirmation Dialog */}
+      <AlertDialog
+        open={deleteDialog.open}
+        onOpenChange={(open) =>
+          setDeleteDialog((prev) => ({ ...prev, open }))
+        }
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {deleteDialog.mode === "forEveryone"
+                ? "Delete for everyone?"
+                : "Delete for you?"}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {deleteDialog.mode === "forEveryone"
+                ? "This message will be permanently deleted for all participants. This action cannot be undone."
+                : "This message will be removed from your view only. Other participants will still see it."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() =>
+                handleDeleteMessage(
+                  deleteDialog.messageId,
+                  deleteDialog.mode
+                )
+              }
+              className="bg-destructive/10 text-destructive hover:bg-destructive/20"
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

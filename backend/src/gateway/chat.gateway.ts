@@ -296,4 +296,41 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       groupId: roomType === 'group' ? roomId : undefined,
     });
   }
+
+  /**
+   * Emit a chat deleted event.
+   * Only sent to the specific user who deleted/hid the chat.
+   */
+  emitChatDeleted(chatId: string, userId: string): void {
+    // Find the socket of the user who deleted
+    for (const [clerkId, socketId] of this.userSockets.entries()) {
+      // We broadcast to all clients — the frontend filters by userId
+      this.server.to(socketId).emit('chat:deleted', { chatId, userId });
+    }
+    // Also broadcast globally for sidebar updates
+    this.server.emit('chat:deleted', { chatId, userId });
+  }
+
+  /**
+   * Emit a message deleted event to the room.
+   * All participants in the room remove this message.
+   */
+  emitMessageDeleted(roomType: 'chat' | 'group', roomId: string, messageId: string): void {
+    this.server.to(`${roomType}:${roomId}`).emit('message:deleted', { messageId, roomType, roomId });
+  }
+
+  /**
+   * Emit updated reactions for a message to all room members.
+   */
+  emitReactionUpdate(
+    roomType: 'chat' | 'group',
+    roomId: string,
+    messageId: string,
+    reactions: any[],
+  ): void {
+    this.server.to(`${roomType}:${roomId}`).emit('reaction:update', {
+      messageId,
+      reactions,
+    });
+  }
 }
