@@ -13,6 +13,7 @@ import { ChatsService } from './chats.service';
 import { MessagesService } from '../messages/messages.service';
 import { UsersService } from '../users/users.service';
 import { AuthGuard } from '../auth/auth.guard';
+import { ChatGateway } from '../gateway/chat.gateway';
 
 @Controller('chats')
 @UseGuards(AuthGuard)
@@ -21,6 +22,7 @@ export class ChatsController {
     private readonly chatsService: ChatsService,
     private readonly messagesService: MessagesService,
     private readonly usersService: UsersService,
+    private readonly chatGateway: ChatGateway,
   ) {}
 
   @Get()
@@ -93,7 +95,12 @@ export class ChatsController {
     );
 
     // Re-fetch with populated sender
-    return this.messagesService.getMessageById(message._id.toString());
+    const populated = await this.messagesService.getMessageById(message._id.toString());
+
+    // Emit WebSocket event so other clients get real-time updates
+    this.chatGateway.emitNewMessage('chat', chatId, populated);
+
+    return populated;
   }
 
   @Post('messages/:messageId/reactions')

@@ -77,6 +77,66 @@ export default function ChatPage() {
     fetchData();
   }, [chatId, getToken]);
 
+  // Listen for real-time profile/status updates
+  useEffect(() => {
+    let mounted = true;
+
+    const setupListeners = async () => {
+      try {
+        const { getSocket } = await import("@/lib/socket");
+        const socket = getSocket();
+        if (!socket?.connected) return;
+
+        const refetchChat = async () => {
+          if (!mounted) return;
+          try {
+            const token = await getToken();
+            const meRes = await fetch(
+              `${process.env.NEXT_PUBLIC_API_URL}/users/me`,
+              { headers: { Authorization: `Bearer ${token}` } }
+            );
+            const me = meRes.ok ? await meRes.json() : null;
+
+            const chatsRes = await fetch(
+              `${process.env.NEXT_PUBLIC_API_URL}/chats`,
+              { headers: { Authorization: `Bearer ${token}` } }
+            );
+            if (!chatsRes.ok) return;
+            const chats = await chatsRes.json();
+            const currentChat = chats.find((c: any) => c._id === chatId);
+
+            if (currentChat && me) {
+              const other = currentChat.participants.find(
+                (p: any) => p._id !== me._id
+              );
+              if (other) {
+                setChatName(other.displayName || other.email || "Chat");
+                setChatAvatar(other.profilePicture);
+                setIsOnline(other.status === "online");
+              }
+            }
+          } catch { /* best effort */ }
+        };
+
+        socket.on("user:updated", refetchChat);
+        socket.on("user:online", refetchChat);
+
+        return () => {
+          socket.off("user:updated", refetchChat);
+          socket.off("user:online", refetchChat);
+        };
+      } catch { /* socket may not exist */ }
+    };
+
+    let cleanup: (() => void) | undefined;
+    setupListeners().then((fn) => { cleanup = fn; });
+
+    return () => {
+      mounted = false;
+      cleanup?.();
+    };
+  }, [chatId, getToken]);
+
   if (loading) {
     return (
       <div className="flex-1 flex items-center justify-center bg-background">

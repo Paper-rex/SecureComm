@@ -281,4 +281,19 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     // More than 20 messages in 10 seconds = flooding
     return recent.length > 20;
   }
+
+  // ─── Public API for REST Controllers ──────────────────
+
+  /**
+   * Emit a new message event to a chat or group room.
+   * Called by REST controllers after saving a message via HTTP.
+   */
+  emitNewMessage(roomType: 'chat' | 'group', roomId: string, populatedMessage: any): void {
+    this.server.to(`${roomType}:${roomId}`).emit('message:receive', populatedMessage);
+    // Also broadcast globally so sidebar can update for users not in the room
+    this.server.emit('sidebar:new-message', {
+      chatId: roomType === 'chat' ? roomId : undefined,
+      groupId: roomType === 'group' ? roomId : undefined,
+    });
+  }
 }

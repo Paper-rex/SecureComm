@@ -39,7 +39,7 @@ export default function MainLayout({
     const syncUser = async () => {
       try {
         const token = await getToken();
-        await fetch(`${process.env.NEXT_PUBLIC_API_URL}/users/sync`, {
+        const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/users/sync`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -53,6 +53,19 @@ export default function MainLayout({
           }),
         });
         console.log("User synced to MongoDB (online)");
+
+        // Emit WebSocket event so other clients update in real time
+        try {
+          const { getSocket } = await import("@/lib/socket");
+          const socket = getSocket();
+          if (socket?.connected) {
+            socket.emit("user:update", {
+              userId: user.id,
+              displayName: user.fullName || user.firstName || "User",
+              profilePicture: user.imageUrl || "",
+            });
+          }
+        } catch { /* socket may not be connected yet */ }
       } catch (err) {
         console.error("Failed to sync user:", err);
       }
@@ -60,6 +73,55 @@ export default function MainLayout({
 
     syncUser();
   }, [isSignedIn, user, getToken]);
+
+  // Re-sync when Clerk user profile changes (name, avatar)
+  const lastSyncedRef = useRef<string>("");
+  useEffect(() => {
+    if (!isSignedIn || !user || !syncedRef.current) return;
+
+    const profileKey = `${user.fullName}|${user.imageUrl}`;
+    if (lastSyncedRef.current === profileKey || lastSyncedRef.current === "") {
+      lastSyncedRef.current = profileKey;
+      return;
+    }
+    lastSyncedRef.current = profileKey;
+
+    const resyncUser = async () => {
+      try {
+        const token = await getToken();
+        await fetch(`${process.env.NEXT_PUBLIC_API_URL}/users/sync`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            email: user.primaryEmailAddress?.emailAddress || "",
+            displayName: user.fullName || user.firstName || "User",
+            profilePicture: user.imageUrl || "",
+            publicKey: "placeholder-key-" + Date.now(),
+          }),
+        });
+
+        // Emit WebSocket event
+        try {
+          const { getSocket } = await import("@/lib/socket");
+          const socket = getSocket();
+          if (socket?.connected) {
+            socket.emit("user:update", {
+              userId: user.id,
+              displayName: user.fullName || user.firstName || "User",
+              profilePicture: user.imageUrl || "",
+            });
+          }
+        } catch { /* socket may not be connected */ }
+      } catch (err) {
+        console.error("Failed to re-sync user:", err);
+      }
+    };
+
+    resyncUser();
+  }, [isSignedIn, user?.fullName, user?.imageUrl, user, getToken]);
 
   // Set user offline when browser tab closes
   useEffect(() => {

@@ -6,6 +6,7 @@ import { Group, GroupSchema } from './group.schema';
 import { AuthModule } from '../auth/auth.module';
 import { MessagesModule } from '../messages/messages.module';
 import { UsersModule } from '../users/users.module';
+import { GatewayModule } from '../gateway/gateway.module';
 
 @Module({
   imports: [
@@ -13,6 +14,7 @@ import { UsersModule } from '../users/users.module';
     AuthModule,
     forwardRef(() => MessagesModule),
     UsersModule,
+    forwardRef(() => GatewayModule),
   ],
   controllers: [GroupsController],
   providers: [GroupsService],

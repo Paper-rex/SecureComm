@@ -15,6 +15,7 @@ import { GroupsService } from './groups.service';
 import { MessagesService } from '../messages/messages.service';
 import { UsersService } from '../users/users.service';
 import { AuthGuard } from '../auth/auth.guard';
+import { ChatGateway } from '../gateway/chat.gateway';
 
 @Controller('groups')
 @UseGuards(AuthGuard)
@@ -23,6 +24,7 @@ export class GroupsController {
     private readonly groupsService: GroupsService,
     private readonly messagesService: MessagesService,
     private readonly usersService: UsersService,
+    private readonly chatGateway: ChatGateway,
   ) {}
 
   @Get()
@@ -172,6 +174,11 @@ export class GroupsController {
       fileMetadata: body.fileMetadata,
     });
 
-    return this.messagesService.getMessageById(message._id.toString());
+    const populated = await this.messagesService.getMessageById(message._id.toString());
+
+    // Emit WebSocket event so other clients get real-time updates
+    this.chatGateway.emitNewMessage('group', groupId, populated);
+
+    return populated;
   }
 }

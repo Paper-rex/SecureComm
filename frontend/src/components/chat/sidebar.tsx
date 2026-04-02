@@ -23,7 +23,7 @@ import { UserSearchDialog } from "@/components/chat/user-search-dialog";
 import { CreateGroupDialog } from "@/components/group/create-group-dialog";
 import { useRouter, usePathname } from "next/navigation";
 import { useAuth } from "@clerk/nextjs";
-import { connectSocket, disconnectSocket } from "@/lib/socket";
+import { connectSocket, getSocket, disconnectSocket } from "@/lib/socket";
 
 interface SidebarProps {
   onClose?: () => void;
@@ -164,13 +164,12 @@ export function Sidebar({ onClose }: SidebarProps) {
         const socket = connectSocket(token);
         socketConnected.current = true;
 
-        // New message received → increment unread + re-fetch list
-        socket.on("message:receive", (msg: any) => {
+        // New message received via room → increment unread + re-fetch list
+        const handleMessageReceive = (msg: any) => {
           if (!mounted) return;
           const conversationId = msg.chatId || msg.groupId;
           if (!conversationId) return;
 
-          // Only increment if we're NOT currently viewing that conversation
           const isViewing = pathname?.includes(conversationId);
           if (!isViewing) {
             setUnreadCounts((prev) => ({
@@ -179,40 +178,85 @@ export function Sidebar({ onClose }: SidebarProps) {
             }));
           }
 
-          // Re-fetch sidebar lists to update last message / ordering
           fetchChats();
           fetchGroups();
-        });
+        };
+
+        // Global event from REST controllers (catches messages even when not in room)
+        const handleSidebarNewMessage = (data: any) => {
+          if (!mounted) return;
+          const conversationId = data.chatId || data.groupId;
+          if (!conversationId) return;
+
+          const isViewing = pathname?.includes(conversationId);
+          if (!isViewing) {
+            setUnreadCounts((prev) => ({
+              ...prev,
+              [conversationId]: (prev[conversationId] || 0) + 1,
+            }));
+          }
+
+          fetchChats();
+          fetchGroups();
+        };
 
         // User profile updated → re-fetch chats to get new name/picture
-        socket.on("user:updated", () => {
+        const handleUserUpdated = () => {
           if (!mounted) return;
           fetchChats();
-        });
+        };
 
         // Group info updated → re-fetch groups to get new name/icon
-        socket.on("group:updated", () => {
+        const handleGroupUpdated = () => {
           if (!mounted) return;
           fetchGroups();
-        });
+        };
 
         // User online/offline → re-fetch chats for status dots
-        socket.on("user:online", () => {
+        const handleUserOnline = () => {
           if (!mounted) return;
           fetchChats();
-        });
+        };
+
+        socket.on("message:receive", handleMessageReceive);
+        socket.on("sidebar:new-message", handleSidebarNewMessage);
+        socket.on("user:updated", handleUserUpdated);
+        socket.on("group:updated", handleGroupUpdated);
+        socket.on("user:online", handleUserOnline);
+
+        return () => {
+          socket.off("message:receive", handleMessageReceive);
+          socket.off("sidebar:new-message", handleSidebarNewMessage);
+          socket.off("user:updated", handleUserUpdated);
+          socket.off("group:updated", handleGroupUpdated);
+          socket.off("user:online", handleUserOnline);
+        };
       } catch (err) {
         console.error("Failed to setup sidebar socket:", err);
       }
     };
 
-    setupSocket();
+    let cleanup: (() => void) | undefined;
+    setupSocket().then((fn) => { cleanup = fn; });
 
     return () => {
       mounted = false;
-      // Don't disconnect socket here since other components may use it
+      cleanup?.();
     };
   }, [getToken, pathname, fetchChats, fetchGroups]);
+
+  // ─── Join Socket Rooms when chats/groups change ─────────────
+  useEffect(() => {
+    const socket = socketConnected.current ? getSocket() : null;
+    if (!socket?.connected) return;
+
+    chats.forEach((chat) => {
+      socket.emit("join:chat", { chatId: chat._id });
+    });
+    groups.forEach((group) => {
+      socket.emit("join:group", { groupId: group._id });
+    });
+  }, [chats, groups]);
 
   // ─── Clear unread when navigating to a conversation ──────────
   useEffect(() => {
