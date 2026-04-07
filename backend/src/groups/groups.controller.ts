@@ -85,6 +85,10 @@ export class GroupsController {
       await this.usersService.inviteUser(user.email, body.email);
       return { invited: true, message: `Invitation sent to ${body.email}` };
     }
+    // Prevent adding yourself
+    if (member._id.toString() === user._id.toString()) {
+      return { error: true, message: 'You are already a member of this group' };
+    }
     return this.groupsService.addMember(
       groupId,
       user._id.toString(),
@@ -107,6 +111,19 @@ export class GroupsController {
     );
   }
 
+  @Post(':id/leave')
+  async leaveGroup(
+    @Req() req: any,
+    @Param('id') groupId: string,
+  ) {
+    const user = await this.usersService.findByClerkId(req.userId);
+    if (!user) throw new NotFoundException('User not found');
+    await this.groupsService.leaveGroup(groupId, user._id.toString());
+    // Notify all clients so sidebars refresh
+    this.chatGateway.server.emit('group:updated', { groupId });
+    return { success: true };
+  }
+
   @Patch(':id/admins')
   async manageAdmin(
     @Req() req: any,
@@ -127,6 +144,35 @@ export class GroupsController {
       user._id.toString(),
       body.userId,
     );
+  }
+
+  // ─── Hard Delete (creator only, remove group + messages) ─
+
+  @Delete(':id/permanent')
+  async hardDeleteGroup(@Param('id') groupId: string, @Req() req: any) {
+    const user = await this.usersService.findByClerkId(req.userId);
+    if (!user) throw new NotFoundException('User not found');
+
+    // Delete all messages belonging to this group
+    await this.messagesService.deleteAllGroupMessages(groupId);
+
+    // Delete the group itself
+    await this.groupsService.hardDeleteGroup(groupId, user._id.toString());
+
+    // Notify all connected clients so sidebars update
+    this.chatGateway.emitGroupDeleted(groupId);
+
+    return { success: true };
+  }
+
+  // ─── Soft Delete (hide from sidebar for the user) ─────
+
+  @Delete(':id')
+  async softDeleteGroup(@Param('id') groupId: string, @Req() req: any) {
+    const user = await this.usersService.findByClerkId(req.userId);
+    if (!user) throw new NotFoundException('User not found');
+    await this.groupsService.softDeleteGroup(groupId, user._id.toString());
+    return { success: true };
   }
 
   @Get(':id/messages')
@@ -177,6 +223,13 @@ export class GroupsController {
       type: body.type || 'text',
       fileMetadata: body.fileMetadata,
     });
+
+    // Update last message + unhide group for all users who soft-deleted it
+    await this.groupsService.updateLastMessage(
+      groupId,
+      '[Encrypted]',
+      user.displayName,
+    );
 
     const populated = await this.messagesService.getMessageById(message._id.toString());
 

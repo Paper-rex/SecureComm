@@ -154,4 +154,10 @@ export class MessagesService {
 
     await this.messageModel.deleteOne({ _id: messageId });
   }
+
+  // ─── Bulk Delete ──────────────────────────────────────
+
+  async deleteAllGroupMessages(groupId: string): Promise<void> {
+    await this.messageModel.deleteMany({ groupId: new Types.ObjectId(groupId) });
+  }
 }

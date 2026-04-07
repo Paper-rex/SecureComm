@@ -28,6 +28,11 @@ import { AuthModule } from './auth/auth.module';
         }
         return {
           uri: uri || 'mongodb://localhost:27017/securecomm',
+          retryWrites: true,
+          retryReads: true,
+          serverSelectionTimeoutMS: 10000,
+          heartbeatFrequencyMS: 30000,
+          socketTimeoutMS: 45000,
         };
       },
       inject: [ConfigService],

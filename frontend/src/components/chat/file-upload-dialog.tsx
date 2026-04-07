@@ -23,7 +23,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { useAuth } from "@clerk/nextjs";
-import { encryptFile, exportAESKey } from "@/lib/crypto";
+import { encryptFile, exportAESKey, isCryptoAvailable } from "@/lib/crypto";
 
 interface FileUploadDialogProps {
   open: boolean;
@@ -108,6 +108,13 @@ export function FileUploadDialog({
 
     try {
       const token = await getToken();
+
+      // Check if Web Crypto is available (requires HTTPS or localhost)
+      if (!isCryptoAvailable()) {
+        throw new Error(
+          "Encryption is not available over plain HTTP. Please use HTTPS or access via localhost to share files securely."
+        );
+      }
 
       // Stage 1: Encrypt file client-side (AES-256-GCM)
       setUploadStage("Encrypting file (AES-256-GCM)...");

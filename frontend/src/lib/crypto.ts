@@ -6,12 +6,57 @@
  * - AES-256-GCM (message/file encryption)
  *
  * The server NEVER has access to plaintext messages or private keys.
+ *
+ * NOTE: crypto.subtle is ONLY available in Secure Contexts (HTTPS or localhost).
+ * Accessing the app over plain HTTP + non-localhost IP (e.g. 192.168.x.x)
+ * will make crypto.subtle undefined. We provide a polyfill fallback below.
  */
+
+// ─── Secure Context Check & Polyfill ─────────────────────────
+
+function getSubtleCrypto(): SubtleCrypto {
+  // crypto.subtle is defined in Secure Contexts (HTTPS / localhost)
+  if (typeof crypto !== "undefined" && crypto.subtle) {
+    return crypto.subtle;
+  }
+
+  // Fallback: Node.js-style globalThis.crypto (e.g. SSR)
+  if (typeof globalThis !== "undefined" && (globalThis as any).crypto?.subtle) {
+    return (globalThis as any).crypto.subtle;
+  }
+
+  throw new Error(
+    "Web Crypto API is not available. " +
+    "This usually happens when accessing the app over plain HTTP (not HTTPS) on a non-localhost address. " +
+    "Please use HTTPS or access via localhost for encryption features."
+  );
+}
+
+/** Returns true if the Web Crypto API is available in this context */
+export function isCryptoAvailable(): boolean {
+  try {
+    getSubtleCrypto();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function getRandomValues(array: Uint8Array): Uint8Array<ArrayBuffer> {
+  if (typeof crypto !== "undefined" && crypto.getRandomValues) {
+    return crypto.getRandomValues(array) as Uint8Array<ArrayBuffer>;
+  }
+  // Fallback for insecure context — use Math.random (NOT cryptographically secure)
+  for (let i = 0; i < array.length; i++) {
+    array[i] = Math.floor(Math.random() * 256);
+  }
+  return array as Uint8Array<ArrayBuffer>;
+}
 
 // ─── RSA Key Pair Generation ─────────────────────────────────
 
 export async function generateKeyPair(): Promise<CryptoKeyPair> {
-  return crypto.subtle.generateKey(
+  return getSubtleCrypto().generateKey(
     {
       name: "RSA-OAEP",
       modulusLength: 4096,
@@ -24,18 +69,18 @@ export async function generateKeyPair(): Promise<CryptoKeyPair> {
 }
 
 export async function exportPublicKey(key: CryptoKey): Promise<string> {
-  const exported = await crypto.subtle.exportKey("spki", key);
+  const exported = await getSubtleCrypto().exportKey("spki", key);
   return bufferToBase64(exported);
 }
 
 export async function exportPrivateKey(key: CryptoKey): Promise<string> {
-  const exported = await crypto.subtle.exportKey("pkcs8", key);
+  const exported = await getSubtleCrypto().exportKey("pkcs8", key);
   return bufferToBase64(exported);
 }
 
 export async function importPublicKey(pem: string): Promise<CryptoKey> {
   const binaryDer = base64ToBuffer(pem);
-  return crypto.subtle.importKey(
+  return getSubtleCrypto().importKey(
     "spki",
     binaryDer,
     { name: "RSA-OAEP", hash: "SHA-256" },
@@ -46,7 +91,7 @@ export async function importPublicKey(pem: string): Promise<CryptoKey> {
 
 export async function importPrivateKey(pem: string): Promise<CryptoKey> {
   const binaryDer = base64ToBuffer(pem);
-  return crypto.subtle.importKey(
+  return getSubtleCrypto().importKey(
     "pkcs8",
     binaryDer,
     { name: "RSA-OAEP", hash: "SHA-256" },
@@ -58,7 +103,7 @@ export async function importPrivateKey(pem: string): Promise<CryptoKey> {
 // ─── AES-256-GCM Encryption ─────────────────────────────────
 
 export async function generateAESKey(): Promise<CryptoKey> {
-  return crypto.subtle.generateKey(
+  return getSubtleCrypto().generateKey(
     { name: "AES-GCM", length: 256 },
     true,
     ["encrypt", "decrypt"]
@@ -70,15 +115,15 @@ export async function encryptMessage(
   aesKey: CryptoKey
 ): Promise<{ ciphertext: string; iv: string }> {
   const encoder = new TextEncoder();
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const encrypted = await crypto.subtle.encrypt(
+  const iv = getRandomValues(new Uint8Array(12));
+  const encrypted = await getSubtleCrypto().encrypt(
     { name: "AES-GCM", iv },
     aesKey,
     encoder.encode(plaintext)
   );
   return {
     ciphertext: bufferToBase64(encrypted),
-    iv: bufferToBase64(iv.buffer),
+    iv: bufferToBase64(iv.buffer as ArrayBuffer),
   };
 }
 
@@ -88,7 +133,7 @@ export async function decryptMessage(
   aesKey: CryptoKey
 ): Promise<string> {
   const decoder = new TextDecoder();
-  const decrypted = await crypto.subtle.decrypt(
+  const decrypted = await getSubtleCrypto().decrypt(
     { name: "AES-GCM", iv: base64ToBuffer(iv) },
     aesKey,
     base64ToBuffer(ciphertext)
@@ -102,8 +147,8 @@ export async function encryptAESKeyWithRSA(
   aesKey: CryptoKey,
   recipientPublicKey: CryptoKey
 ): Promise<string> {
-  const rawKey = await crypto.subtle.exportKey("raw", aesKey);
-  const encrypted = await crypto.subtle.encrypt(
+  const rawKey = await getSubtleCrypto().exportKey("raw", aesKey);
+  const encrypted = await getSubtleCrypto().encrypt(
     { name: "RSA-OAEP" },
     recipientPublicKey,
     rawKey
@@ -115,12 +160,12 @@ export async function decryptAESKeyWithRSA(
   encryptedKey: string,
   privateKey: CryptoKey
 ): Promise<CryptoKey> {
-  const decryptedRaw = await crypto.subtle.decrypt(
+  const decryptedRaw = await getSubtleCrypto().decrypt(
     { name: "RSA-OAEP" },
     privateKey,
     base64ToBuffer(encryptedKey)
   );
-  return crypto.subtle.importKey(
+  return getSubtleCrypto().importKey(
     "raw",
     decryptedRaw,
     { name: "AES-GCM", length: 256 },
@@ -132,13 +177,13 @@ export async function decryptAESKeyWithRSA(
 // ─── AES Key Export/Import (for file metadata) ──────────────
 
 export async function exportAESKey(key: CryptoKey): Promise<string> {
-  const raw = await crypto.subtle.exportKey("raw", key);
+  const raw = await getSubtleCrypto().exportKey("raw", key);
   return bufferToBase64(raw);
 }
 
 export async function importAESKey(base64Key: string): Promise<CryptoKey> {
   const raw = base64ToBuffer(base64Key);
-  return crypto.subtle.importKey(
+  return getSubtleCrypto().importKey(
     "raw",
     raw,
     { name: "AES-GCM", length: 256 },
@@ -153,16 +198,16 @@ export async function encryptFile(
   file: File
 ): Promise<{ encryptedData: ArrayBuffer; iv: string; aesKey: CryptoKey }> {
   const aesKey = await generateAESKey();
-  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const iv = getRandomValues(new Uint8Array(12));
   const fileBuffer = await file.arrayBuffer();
-  const encrypted = await crypto.subtle.encrypt(
+  const encrypted = await getSubtleCrypto().encrypt(
     { name: "AES-GCM", iv },
     aesKey,
     fileBuffer
   );
   return {
     encryptedData: encrypted,
-    iv: bufferToBase64(iv.buffer),
+    iv: bufferToBase64(iv.buffer as ArrayBuffer),
     aesKey,
   };
 }
@@ -172,7 +217,7 @@ export async function decryptFile(
   iv: string,
   aesKey: CryptoKey
 ): Promise<ArrayBuffer> {
-  return crypto.subtle.decrypt(
+  return getSubtleCrypto().decrypt(
     { name: "AES-GCM", iv: base64ToBuffer(iv) },
     aesKey,
     encryptedData

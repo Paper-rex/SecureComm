@@ -14,7 +14,9 @@ export class GroupsService {
     data: { name: string; description?: string; memberIds: string[] },
   ): Promise<GroupDocument> {
     const cid = new Types.ObjectId(creatorId);
-    const memberObjectIds = data.memberIds.map((id) => new Types.ObjectId(id));
+    // Deduplicate: filter out the creator's own ID from memberIds
+    const uniqueMemberIds = data.memberIds.filter((id) => id !== creatorId);
+    const memberObjectIds = uniqueMemberIds.map((id) => new Types.ObjectId(id));
 
     return this.groupModel.create({
       name: data.name,
@@ -28,7 +30,10 @@ export class GroupsService {
   async getUserGroups(userId: string): Promise<GroupDocument[]> {
     const uid = new Types.ObjectId(userId);
     return this.groupModel
-      .find({ members: uid })
+      .find({
+        members: uid,
+        hiddenBy: { $nin: [uid] },
+      })
       .populate('creator', 'email displayName')
       .populate('members', 'email displayName profilePicture status')
       .populate('admins', 'email displayName')
@@ -83,11 +88,17 @@ export class GroupsService {
       throw new ForbiddenException('Only admins can add members');
     }
 
-    const mid = new Types.ObjectId(newMemberId);
-    if (!group.members.some((m) => m.equals(mid))) {
-      group.members.push(mid);
-      await group.save();
+    // Check if user is already a member (use string comparison to handle populated docs)
+    const alreadyMember = group.members.some(
+      (m) => m.toString() === newMemberId || (m as any)._id?.toString() === newMemberId,
+    );
+    if (alreadyMember) {
+      throw new ForbiddenException('User is already a member of this group');
     }
+
+    const mid = new Types.ObjectId(newMemberId);
+    group.members.push(mid);
+    await group.save();
 
     return group;
   }
@@ -210,7 +221,36 @@ export class GroupsService {
   ): Promise<void> {
     await this.groupModel.updateOne(
       { _id: groupId },
-      { lastMessage: { text, timestamp: new Date(), senderName } },
+      {
+        lastMessage: { text, timestamp: new Date(), senderName },
+        // Auto-unhide the group when a new message arrives
+        hiddenBy: [],
+      },
     );
+  }
+
+  // ─── Soft Delete (hide from sidebar) ──────────────────
+
+  async softDeleteGroup(groupId: string, userId: string): Promise<void> {
+    const uid = new Types.ObjectId(userId);
+    await this.groupModel.updateOne(
+      { _id: groupId, members: uid },
+      { $addToSet: { hiddenBy: uid } },
+    );
+  }
+
+  // ─── Hard Delete (creator only, removes group + messages) ─
+
+  async hardDeleteGroup(groupId: string, userId: string): Promise<void> {
+    const group = await this.groupModel.findById(groupId);
+    if (!group) throw new NotFoundException('Group not found');
+
+    const uid = new Types.ObjectId(userId);
+    if (!group.creator.equals(uid)) {
+      throw new ForbiddenException('Only the group creator can delete the group');
+    }
+
+    // Delete the group document
+    await this.groupModel.deleteOne({ _id: groupId });
   }
 }

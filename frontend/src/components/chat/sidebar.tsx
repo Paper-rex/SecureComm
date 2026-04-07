@@ -225,6 +225,16 @@ export function Sidebar({ onClose }: SidebarProps) {
           fetchGroups();
         };
 
+        // Group permanently deleted by creator
+        const handleGroupDeleted = (data: { groupId: string }) => {
+          if (!mounted) return;
+          setGroups((prev) => prev.filter((g) => g._id !== data.groupId));
+          // Navigate away if viewing the deleted group
+          if (pathname?.includes(data.groupId)) {
+            router.push("/dashboard");
+          }
+        };
+
         // User online/offline → re-fetch chats for status dots
         const handleUserOnline = () => {
           if (!mounted) return;
@@ -235,6 +245,7 @@ export function Sidebar({ onClose }: SidebarProps) {
         socket.on("sidebar:new-message", handleSidebarNewMessage);
         socket.on("user:updated", handleUserUpdated);
         socket.on("group:updated", handleGroupUpdated);
+        socket.on("group:deleted", handleGroupDeleted);
         socket.on("user:online", handleUserOnline);
 
         return () => {
@@ -242,6 +253,7 @@ export function Sidebar({ onClose }: SidebarProps) {
           socket.off("sidebar:new-message", handleSidebarNewMessage);
           socket.off("user:updated", handleUserUpdated);
           socket.off("group:updated", handleGroupUpdated);
+          socket.off("group:deleted", handleGroupDeleted);
           socket.off("user:online", handleUserOnline);
         };
       } catch (err) {
@@ -321,18 +333,55 @@ export function Sidebar({ onClose }: SidebarProps) {
 
     // If currently viewing this chat, navigate away
     if (pathname?.includes(chatId)) {
-      router.push("/chat");
+      router.push("/dashboard");
     }
 
     try {
       const token = await getToken();
-      await fetch(`${process.env.NEXT_PUBLIC_API_URL}/chats/${chatId}`, {
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/chats/${chatId}`, {
         method: "DELETE",
         headers: { Authorization: `Bearer ${token}` },
       });
+      if (!res.ok) {
+        console.error("Failed to delete chat:", res.status);
+        fetchChats(); // revert on error
+      }
     } catch (err) {
       console.error("Failed to delete chat:", err);
       fetchChats(); // revert on error
+    }
+  };
+
+  // ─── Delete Group Handler (soft-delete) ────────────────
+  const [deleteGroupDialog, setDeleteGroupDialog] = useState<{ open: boolean; groupId: string; groupName: string }>({
+    open: false,
+    groupId: "",
+    groupName: "",
+  });
+
+  const handleDeleteGroup = async (groupId: string) => {
+    // Optimistic removal
+    setGroups((prev) => prev.filter((g) => g._id !== groupId));
+    setDeleteGroupDialog({ open: false, groupId: "", groupName: "" });
+
+    // If currently viewing this group, navigate away
+    if (pathname?.includes(groupId)) {
+      router.push("/dashboard");
+    }
+
+    try {
+      const token = await getToken();
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/groups/${groupId}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        console.error("Failed to delete group:", res.status);
+        fetchGroups(); // revert on error
+      }
+    } catch (err) {
+      console.error("Failed to delete group:", err);
+      fetchGroups(); // revert on error
     }
   };
 
@@ -504,51 +553,69 @@ export function Sidebar({ onClose }: SidebarProps) {
                     const isActive = pathname?.includes(group._id);
                     const unread = unreadCounts[group._id] || 0;
                     return (
-                      <motion.button
-                        key={group._id}
-                        initial={{ opacity: 0, y: 10 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ delay: i * 0.05 }}
-                        onClick={() => {
-                          router.push(`/group/${group._id}`);
-                          onClose?.();
-                        }}
-                        className={`w-full flex items-center gap-3 p-3 rounded-xl transition-all duration-200 text-left group ${
-                          isActive
-                            ? "bg-primary/10 border border-primary/20"
-                            : "hover:bg-muted/50"
-                        }`}
-                      >
-                        <Avatar className="w-10 h-10 border border-border/50">
-                          <AvatarImage src={group.icon?.startsWith('http') ? group.icon : undefined} />
-                          <AvatarFallback className="bg-amber-500/10 text-amber-500 text-sm font-medium">
-                            {group.icon && !group.icon.startsWith('http') ? group.icon : "👥"}
-                          </AvatarFallback>
-                        </Avatar>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center justify-between">
-                            <span className={`font-medium text-sm truncate ${unread > 0 ? "font-bold" : ""}`}>{group.name}</span>
-                            <span className="text-[10px] text-muted-foreground flex-shrink-0 ml-2">
-                              {group.lastMessage?.timestamp
-                                ? getTimeAgo(group.lastMessage.timestamp)
-                                : getTimeAgo(group.updatedAt)}
-                            </span>
-                          </div>
-                          <div className="flex items-center justify-between mt-0.5">
-                            <div className="flex items-center gap-1 min-w-0">
-                              <Hash className="w-3 h-3 text-muted-foreground/60 flex-shrink-0" />
-                              <span className={`text-xs truncate ${unread > 0 ? "text-foreground font-medium" : "text-muted-foreground"}`}>
-                                {group.lastMessage?.text || `${group.members?.length || 0} members`}
-                              </span>
+                      <ContextMenu key={group._id}>
+                        <ContextMenuTrigger asChild>
+                          <motion.button
+                            initial={{ opacity: 0, y: 10 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            transition={{ delay: i * 0.05 }}
+                            onClick={() => {
+                              router.push(`/group/${group._id}`);
+                              onClose?.();
+                            }}
+                            className={`w-full flex items-center gap-3 p-3 rounded-xl transition-all duration-200 text-left group ${
+                              isActive
+                                ? "bg-primary/10 border border-primary/20"
+                                : "hover:bg-muted/50"
+                            }`}
+                          >
+                            <Avatar className="w-10 h-10 border border-border/50">
+                              <AvatarImage src={group.icon?.startsWith('http') ? group.icon : undefined} />
+                              <AvatarFallback className="bg-amber-500/10 text-amber-500 text-sm font-medium">
+                                {group.icon && !group.icon.startsWith('http') ? group.icon : "👥"}
+                              </AvatarFallback>
+                            </Avatar>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center justify-between">
+                                <span className={`font-medium text-sm truncate ${unread > 0 ? "font-bold" : ""}`}>{group.name}</span>
+                                <span className="text-[10px] text-muted-foreground flex-shrink-0 ml-2">
+                                  {group.lastMessage?.timestamp
+                                    ? getTimeAgo(group.lastMessage.timestamp)
+                                    : getTimeAgo(group.updatedAt)}
+                                </span>
+                              </div>
+                              <div className="flex items-center justify-between mt-0.5">
+                                <div className="flex items-center gap-1 min-w-0">
+                                  <Hash className="w-3 h-3 text-muted-foreground/60 flex-shrink-0" />
+                                  <span className={`text-xs truncate ${unread > 0 ? "text-foreground font-medium" : "text-muted-foreground"}`}>
+                                    {group.lastMessage?.text || `${group.members?.length || 0} members`}
+                                  </span>
+                                </div>
+                                {unread > 0 && (
+                                  <span className="flex-shrink-0 ml-2 min-w-[18px] h-[18px] flex items-center justify-center rounded-full bg-primary text-primary-foreground text-[10px] font-bold px-1">
+                                    {unread > 99 ? "99+" : unread}
+                                  </span>
+                                )}
+                              </div>
                             </div>
-                            {unread > 0 && (
-                              <span className="flex-shrink-0 ml-2 min-w-[18px] h-[18px] flex items-center justify-center rounded-full bg-primary text-primary-foreground text-[10px] font-bold px-1">
-                                {unread > 99 ? "99+" : unread}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      </motion.button>
+                          </motion.button>
+                        </ContextMenuTrigger>
+                        <ContextMenuContent className="w-48">
+                          <ContextMenuItem
+                            onClick={() =>
+                              setDeleteGroupDialog({
+                                open: true,
+                                groupId: group._id,
+                                groupName: group.name || "this group",
+                              })
+                            }
+                            className="text-destructive focus:text-destructive"
+                          >
+                            <Trash2 className="w-4 h-4 mr-2" />
+                            Delete group
+                          </ContextMenuItem>
+                        </ContextMenuContent>
+                      </ContextMenu>
                     );
                   })
                 )}
@@ -588,6 +655,32 @@ export function Sidebar({ onClose }: SidebarProps) {
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
               onClick={() => handleDeleteChat(deleteChatDialog.chatId)}
+              className="bg-destructive/10 text-destructive hover:bg-destructive/20"
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Delete Group Confirmation */}
+      <AlertDialog
+        open={deleteGroupDialog.open}
+        onOpenChange={(open) =>
+          setDeleteGroupDialog((prev) => ({ ...prev, open }))
+        }
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete group &quot;{deleteGroupDialog.groupName}&quot;?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This group will be removed from your sidebar. It will reappear if someone sends a new message.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => handleDeleteGroup(deleteGroupDialog.groupId)}
               className="bg-destructive/10 text-destructive hover:bg-destructive/20"
             >
               Delete

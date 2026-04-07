@@ -333,4 +333,12 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       reactions,
     });
   }
+
+  /**
+   * Emit a group deleted event to all clients.
+   * Used when the creator permanently deletes a group.
+   */
+  emitGroupDeleted(groupId: string): void {
+    this.server.emit('group:deleted', { groupId });
+  }
 }

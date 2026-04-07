@@ -10,6 +10,7 @@ import {
   CheckCheck,
   Check,
   ArrowDown,
+  ArrowLeft,
   FileText,
   Image,
   Download,
@@ -53,6 +54,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { FileUploadDialog } from "@/components/chat/file-upload-dialog";
 import { useAuth } from "@clerk/nextjs";
+import { useRouter } from "next/navigation";
 
 interface ChatWindowProps {
   chatId: string;
@@ -62,6 +64,7 @@ interface ChatWindowProps {
   isGroup?: boolean;
   memberCount?: number;
   myMongoId?: string;
+  onGroupNameClick?: () => void;
 }
 
 interface MessageData {
@@ -109,11 +112,13 @@ export function ChatWindow({
   isGroup,
   memberCount,
   myMongoId,
+  onGroupNameClick,
 }: ChatWindowProps) {
   const [messages, setMessages] = useState<MessageData[]>([]);
   const [loading, setLoading] = useState(true);
   const [newMessage, setNewMessage] = useState("");
   const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
   const [fileDialogOpen, setFileDialogOpen] = useState(false);
   const [deleteDialog, setDeleteDialog] = useState<{
@@ -124,6 +129,7 @@ export function ChatWindow({
   }>({ open: false, messageId: "", mode: "forMe", isSender: false });
   const scrollRef = useRef<HTMLDivElement>(null);
   const { getToken } = useAuth();
+  const router = useRouter();
 
   const fetchMessages = useCallback(async () => {
     try {
@@ -147,32 +153,51 @@ export function ChatWindow({
     }
   }, [chatId, isGroup, getToken]);
 
+  // ─── Initial load via REST, then fully WebSocket-driven ──────
   useEffect(() => {
     fetchMessages();
-
-    // Poll for new messages every 3 seconds
-    const interval = setInterval(() => {
-      fetchMessages();
-    }, 3000);
-
-    return () => clearInterval(interval);
   }, [fetchMessages]);
 
-  // ─── Socket listeners for real-time updates ──────────
+  // ─── Socket: join room & listen for all real-time events ──────
   useEffect(() => {
     let mounted = true;
 
-    const setupListeners = async () => {
+    const setupSocket = async () => {
       try {
         const { getSocket } = await import("@/lib/socket");
         const socket = getSocket();
         if (!socket?.connected) return;
 
+        // Join the correct room so the server sends us events
+        if (isGroup) {
+          socket.emit("join:group", { groupId: chatId });
+        } else {
+          socket.emit("join:chat", { chatId });
+        }
+
+        // ─── New message received via WebSocket ───────────
+        const handleMessageReceive = (msg: any) => {
+          if (!mounted) return;
+          // Only append messages belonging to this conversation
+          const belongsHere = isGroup
+            ? msg.groupId === chatId
+            : msg.chatId === chatId;
+          if (!belongsHere) return;
+
+          setMessages((prev) => {
+            // Deduplicate: avoid adding if already present (e.g. own optimistic or REST echo)
+            if (prev.some((m) => m._id === msg._id)) return prev;
+            return [...prev, msg];
+          });
+        };
+
+        // ─── Message deleted ──────────────────────────────
         const handleMessageDeleted = (data: { messageId: string }) => {
           if (!mounted) return;
           setMessages((prev) => prev.filter((m) => m._id !== data.messageId));
         };
 
+        // ─── Reaction updated ─────────────────────────────
         const handleReactionUpdate = (data: {
           messageId: string;
           reactions: { userId: string; emoji: string }[];
@@ -187,20 +212,37 @@ export function ChatWindow({
           );
         };
 
+        // ─── Message status (delivered / read) ────────────
+        const handleMessageStatus = (data: {
+          messageId: string;
+          status: "delivered" | "read";
+        }) => {
+          if (!mounted) return;
+          setMessages((prev) =>
+            prev.map((m) =>
+              m._id === data.messageId ? { ...m, status: data.status } : m
+            )
+          );
+        };
+
+        socket.on("message:receive", handleMessageReceive);
         socket.on("message:deleted", handleMessageDeleted);
         socket.on("reaction:update", handleReactionUpdate);
+        socket.on("message:status", handleMessageStatus);
 
         return () => {
+          socket.off("message:receive", handleMessageReceive);
           socket.off("message:deleted", handleMessageDeleted);
           socket.off("reaction:update", handleReactionUpdate);
+          socket.off("message:status", handleMessageStatus);
         };
       } catch {
-        /* socket may not exist */
+        /* socket may not be initialized yet */
       }
     };
 
     let cleanup: (() => void) | undefined;
-    setupListeners().then((fn) => {
+    setupSocket().then((fn) => {
       cleanup = fn;
     });
 
@@ -208,7 +250,7 @@ export function ChatWindow({
       mounted = false;
       cleanup?.();
     };
-  }, [chatId]);
+  }, [chatId, isGroup]);
 
   const scrollToBottom = () => {
     scrollRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -223,6 +265,7 @@ export function ChatWindow({
     const messageText = newMessage.trim();
     setNewMessage("");
     setSending(true);
+    setSendError(null);
 
     try {
       const token = await getToken();
@@ -245,13 +288,19 @@ export function ChatWindow({
       });
 
       if (res.ok) {
-        // Refresh messages from server to get proper data
-        await fetchMessages();
+        // Message will appear via WebSocket 'message:receive' event —
+        // no need to refetch the entire message list
       } else {
-        console.error("Failed to send message:", await res.text());
+        console.error("Failed to send message:", res.status);
+        setNewMessage(messageText); // restore the message so user doesn't lose it
+        setSendError("Failed to send message. Please try again.");
+        setTimeout(() => setSendError(null), 5000);
       }
     } catch (err) {
       console.error("Failed to send message:", err);
+      setNewMessage(messageText);
+      setSendError("Network error. Check your connection.");
+      setTimeout(() => setSendError(null), 5000);
     } finally {
       setSending(false);
     }
@@ -516,21 +565,32 @@ export function ChatWindow({
       {/* Chat Header */}
       <div className="h-14 border-b border-border/50 flex items-center justify-between px-4 bg-card/50 backdrop-blur-lg flex-shrink-0">
         <div className="flex items-center gap-3">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="rounded-full w-8 h-8 hover:bg-muted/80 flex-shrink-0"
+            onClick={() => router.push("/dashboard")}
+          >
+            <ArrowLeft className="w-4 h-4" />
+          </Button>
           <Avatar className="w-10 h-10 border border-border/50">
             <AvatarImage src={chatAvatar} />
             <AvatarFallback
               className={`${isGroup ? "bg-amber-500/10 text-amber-500" : "bg-primary/10 text-primary"} text-sm font-medium`}
             >
               {isGroup
-                ? chatAvatar || getInitials(chatName)
+                ? "👥"
                 : getInitials(chatName)}
             </AvatarFallback>
           </Avatar>
-          <div>
-            <h3 className="font-semibold text-sm">{chatName}</h3>
+          <div
+            className={isGroup && onGroupNameClick ? "cursor-pointer group/name" : ""}
+            onClick={isGroup && onGroupNameClick ? onGroupNameClick : undefined}
+          >
+            <h3 className={`font-semibold text-sm ${isGroup && onGroupNameClick ? "group-hover/name:underline decoration-primary/40 underline-offset-2" : ""}`}>{chatName}</h3>
             <p className="text-[10px] text-muted-foreground flex items-center gap-1">
               {isGroup ? (
-                <>{memberCount || 0} members</>
+                <>{memberCount || 0} members{onGroupNameClick ? " · Tap for settings" : ""}</>
               ) : (
                 <>
                   <span
@@ -797,6 +857,12 @@ export function ChatWindow({
 
       {/* Message Input */}
       <div className="border-t border-border/50 p-3 bg-card/30 backdrop-blur-sm flex-shrink-0">
+        {sendError && (
+          <div className="mb-2 text-xs text-destructive bg-destructive/10 rounded-lg px-3 py-2 flex items-center justify-between">
+            <span>{sendError}</span>
+            <button onClick={() => setSendError(null)} className="ml-2 text-destructive/60 hover:text-destructive">✕</button>
+          </div>
+        )}
         <div className="flex items-end gap-2">
           <Tooltip>
             <TooltipTrigger
@@ -842,7 +908,9 @@ export function ChatWindow({
         onOpenChange={setFileDialogOpen}
         chatId={chatId}
         isGroup={isGroup}
-        onFileSent={fetchMessages}
+        onFileSent={() => {
+          // File message will arrive via WebSocket 'message:receive'
+        }}
       />
 
       {/* Delete Confirmation Dialog */}

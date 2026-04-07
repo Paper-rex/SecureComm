@@ -29,6 +29,9 @@ export class Group {
     timestamp: Date;
     senderName: string;
   };
+
+  @Prop({ type: [{ type: Types.ObjectId, ref: 'User' }], default: [] })
+  hiddenBy: Types.ObjectId[];
 }
 
 export const GroupSchema = SchemaFactory.createForClass(Group);

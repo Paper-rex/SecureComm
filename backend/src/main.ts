@@ -10,13 +10,12 @@ async function bootstrap() {
   app.use(helmet());
 
   // ─── CORS Configuration ──────────────────────────────
-  const allowedOrigins = (process.env.FRONTEND_URL || 'http://localhost:3000')
-    .split(',')
-    .map((o) => o.trim());
   app.enableCors({
-    origin: allowedOrigins,
+    origin: (process.env.FRONTEND_URL || 'http://localhost:3000')
+      .split(',')
+      .map((o) => o.trim()),
     methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
-    credentials: true,
+    credentials: !!process.env.FRONTEND_URL,
     allowedHeaders: ['Content-Type', 'Authorization'],
   });
 
