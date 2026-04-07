@@ -21,10 +21,12 @@ const allowedOrigins = (process.env.FRONTEND_URL || 'http://localhost:3000')
 
 @WebSocketGateway({
   cors: {
-    origin: allowedOrigins,
+    origin: [
+      'https://securecomm.vercel.app',
+      'http://localhost:3000',
+    ],
     credentials: true,
   },
-  transports: ['websocket', 'polling'],
 })
 export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer()
@@ -42,7 +44,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     private chatsService: ChatsService,
     private groupsService: GroupsService,
     private usersService: UsersService,
-  ) {}
+  ) { }
 
   // ─── Connection Lifecycle ─────────────────────────────
 

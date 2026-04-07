@@ -11,11 +11,12 @@ async function bootstrap() {
 
   // ─── CORS Configuration ──────────────────────────────
   app.enableCors({
-    origin: (process.env.FRONTEND_URL || 'http://localhost:3000')
-      .split(',')
-      .map((o) => o.trim()),
+    origin: [
+      'https://securecomm.vercel.app',
+      'http://localhost:3000',
+    ],
     methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
-    credentials: !!process.env.FRONTEND_URL,
+    credentials: true,
     allowedHeaders: ['Content-Type', 'Authorization'],
   });
 
