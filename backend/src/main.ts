@@ -2,6 +2,11 @@ import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { ValidationPipe } from '@nestjs/common';
 import helmet from 'helmet';
+import * as dns from 'dns';
+
+// Force DNS to prefer IPv4. This avoids ENETUNREACH issues when IPv6 is not available
+// but the system attempts to use it (common with Google/Gmail SMTP servers).
+dns.setDefaultResultOrder('ipv4first');
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
